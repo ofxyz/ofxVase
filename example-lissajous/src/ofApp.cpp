@@ -48,7 +48,7 @@ void ofApp::draw() {
     ofxVase::Options opts;
     opts.joint = ofxVase::JointStyle::Round;
     opts.cap = ofxVase::CapStyle::Round;
-    opts.feather = false;  // Disabled until feathering is fixed
+    opts.feather = true;
     opts.smoothing = smoothing;  // Catmull-Rom subdivision
     
     ofxVase::Polyline poly(points, colors, widths, opts);

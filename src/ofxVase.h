@@ -11,6 +11,7 @@
  * - Round, Square, and Butt end caps
  * - Joint styles: Miter, Bevel, Round
  * - Catmull-Rom spline smoothing
+ * - Vertex-alpha anti-aliasing via outset fade polygons
  * 
  * License: BSD 3-Clause (see LICENSE.txt)
  */
@@ -51,8 +52,9 @@ struct Options {
     float feathering = 1.0f;
     bool noFeatherAtCap = false;
     bool noFeatherAtCore = false;
-    float worldToScreenRatio = 1.0f;  // For resolution-independent rendering
-    int smoothing = 0;  // 0 = no smoothing, >0 = subdivisions per segment (Catmull-Rom)
+    float worldToScreenRatio = 1.0f;
+    int smoothing = 0;
+    float miterLimit = 4.0f;
     
     Options() = default;
     
@@ -66,6 +68,7 @@ struct Options {
     }
     Options& setScale(float s) { worldToScreenRatio = s; return *this; }
     Options& setSmoothing(int subdivisions) { smoothing = subdivisions; return *this; }
+    Options& setMiterLimit(float limit) { miterLimit = limit; return *this; }
 };
 
 // ============================================================================
@@ -74,36 +77,34 @@ struct Options {
 
 class VertexArrayHolder {
 public:
-    // Draw modes (renamed to avoid OpenGL macro conflicts)
     static constexpr int DRAW_TRIANGLES = 0;
     static constexpr int DRAW_TRIANGLE_STRIP = 1;
     
     int glmode = DRAW_TRIANGLES;
     
     std::vector<glm::vec3> vertices;
-    std::vector<glm::vec2> uvs;      // UV.x, UV.y for position in stroke
-    std::vector<glm::vec2> uvs2;     // UV.z, UV.w for fade control (rr values)
     std::vector<ofFloatColor> colors;
     
     void clear();
     int getCount() const { return static_cast<int>(vertices.size()); }
     void setGlDrawMode(int mode) { glmode = mode; }
     
-    // Push a vertex with fade ratio (rr = 0 means full alpha, rr > 0 means fade)
-    void push(const glm::vec2& pos, const ofFloatColor& color, float rr = 0.0f);
-    void push(const glm::vec2& pos, const ofFloatColor& color, float rrX, float rrY);
+    int push(const glm::vec2& pos, const ofFloatColor& color);
+    
+    // Push with alpha forced to 0 (for anti-aliased outer edges)
+    int pushF(const glm::vec2& pos, const ofFloatColor& color);
+    
     void push3(const glm::vec2& p1, const glm::vec2& p2, const glm::vec2& p3,
-               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3,
-               float rr1 = 0, float rr2 = 0, float rr3 = 0);
-    void pushFade(const glm::vec2& pos, const ofFloatColor& color);  // Fully faded
+               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3);
+    
+    void push4(const glm::vec2& p1, const glm::vec2& p2, const glm::vec2& p3, const glm::vec2& p4,
+               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3, const ofFloatColor& c4);
     
     // Merge another holder
     void push(const VertexArrayHolder& other);
     
-    // Get vertex at index
     glm::vec2 get(int i) const;
     
-    // Convert to ofMesh
     ofMesh toMesh() const;
     
     // Jump for triangle strip (degenerate triangles)
@@ -124,28 +125,22 @@ public:
     
     Polyline() = default;
     
-    // Uniform color and width
     Polyline(const std::vector<glm::vec2>& points, 
              const ofFloatColor& color, 
              float width,
              const Options& opt = Options());
     
-    // Per-vertex colors and widths
     Polyline(const std::vector<glm::vec2>& points,
              const std::vector<ofFloatColor>& colors,
              const std::vector<float>& widths,
              const Options& opt = Options());
     
-    // From ofPolyline
     Polyline(const ofPolyline& poly,
              const ofFloatColor& color,
              float width,
              const Options& opt = Options());
     
-    // Get the resulting mesh
     ofMesh getMesh() const { return holder.toMesh(); }
-    
-    // Append another polyline
     void append(const Polyline& other) { holder.push(other.holder); }
     
 private:
@@ -161,16 +156,21 @@ private:
     };
     
     struct StPolyline {
-        glm::vec2 vP;      // Vector to intersection point
-        glm::vec2 T;       // Core thickness
-        glm::vec2 R;       // Fading edge
-        glm::vec2 bR;      // Out stepping vector
-        glm::vec2 T1;      // Alternate vector
+        glm::vec2 vP{0};     // vector to intersection point (outward, core)
+        glm::vec2 vR{0};     // fading vector at sharp end (outward)
+        glm::vec2 T{0};      // core thickness vector (outward)
+        glm::vec2 R{0};      // fading edge vector
+        glm::vec2 bR{0};     // out stepping vector, same direction as cap
+        glm::vec2 T1{0};     // alternate core vector
+        glm::vec2 R1{0};     // alternate fade vector
         float t = 0, r = 0;
-        bool degenT = false;
-        bool degenR = false;
+        bool degenT = false;  // core degenerated
+        bool degenR = false;  // fade degenerated
         bool preFull = false;
-        glm::vec2 PT;
+        glm::vec2 PT{0};     // degeneration point (core)
+        glm::vec2 PR{0};     // degeneration point (fade)
+        float pt = 0;        // parameter at intersection
+        bool R_full_degen = false;
         char djoint = 0;
     };
     
@@ -180,16 +180,16 @@ private:
         float W[3];
         StPolyline SL[3];
         VertexArrayHolder vah;
+        glm::vec2 capStart{0}, capEnd{0};
     };
     
-    // Core tessellation methods
     static void determineTr(float w, float& t, float& R, float scale);
     static float getPljRoundDangle(float t, float r, float scale);
     
     static void makeTrc(const glm::vec2& P1, const glm::vec2& P2,
                         glm::vec2& T, glm::vec2& R, glm::vec2& C,
                         float w, const Options& opt,
-                        float& rr, float& tt, float& dist, bool anchorMode);
+                        float& rr, float& tt, float& dist);
     
     void polylineRange(const std::vector<glm::vec2>& P,
                        const std::vector<ofFloatColor>& C,
@@ -209,6 +209,12 @@ private:
                        const Options& opt, InternalOpt& inopt,
                        int from, int to);
     
+    static void brushArc(VertexArrayHolder& tris,
+                         const glm::vec2& center, const ofFloatColor& col,
+                         float t, float r,
+                         const glm::vec2& N_start, const glm::vec2& N_end,
+                         float wsr);
+    
     static void segment(StAnchor& SA, const Options& opt,
                         bool capFirst, bool capLast, bool core);
     
@@ -218,9 +224,16 @@ private:
                             const glm::vec2& cap1, const glm::vec2& cap2, bool core);
     
     static void anchor(StAnchor& SA, const Options& opt, bool capFirst, bool capLast);
+    
     static void anchorLate(const Options& opt,
                            glm::vec2* P, ofFloatColor* C, StPolyline* SL,
-                           VertexArrayHolder& tris, bool capFirst, bool capLast);
+                           VertexArrayHolder& tris,
+                           const glm::vec2& cap1, const glm::vec2& cap2);
+    
+    static void anchorCap(const Options& opt,
+                          glm::vec2* P, ofFloatColor* C, StPolyline* SL,
+                          VertexArrayHolder& tris,
+                          const glm::vec2& cap1, const glm::vec2& cap2);
     
     static void vectorsToArc(VertexArrayHolder& hold,
                              const glm::vec2& P, const ofFloatColor& C, const ofFloatColor& C2,
@@ -251,7 +264,7 @@ public:
 };
 
 // ============================================================================
-// Renderer - Batch rendering helper
+// Renderer - Batch rendering helper (enables alpha blending)
 // ============================================================================
 
 class Renderer {
@@ -259,22 +272,14 @@ public:
     Renderer();
     ~Renderer();
     
-    // Initialize renderer
     void setup();
     
-    // Begin/end rendering block (enables alpha blending)
     void begin();
     void end();
     
-    // Draw polylines and segments
     void draw(const VertexArrayHolder& holder);
     void draw(const Polyline& polyline);
     void draw(const Segment& segment);
-    
-    // For compatibility - always returns true since mesh rendering works
-    bool isShaderLoaded() const { return true; }
-    bool getUseVbo() const { return false; }
-    void setUseVbo(bool) { /* no-op, always uses mesh */ }
     
 private:
     bool initialized = false;
@@ -285,26 +290,24 @@ private:
 // ============================================================================
 
 namespace util {
-    // Vector operations matching C# Vec2Ext
     float normalize(glm::vec2& v);
-    void perpen(glm::vec2& v);  // Perpendicular (rotate 90 CCW)
+    void perpen(glm::vec2& v);
     void opposite(glm::vec2& v);
     float signedArea(const glm::vec2& p1, const glm::vec2& p2, const glm::vec2& p3);
     void dot(const glm::vec2& a, const glm::vec2& b, glm::vec2& out);
-    void anchorOutward(glm::vec2& v, const glm::vec2& b, const glm::vec2& c);
+    bool anchorOutward(glm::vec2& v, const glm::vec2& b, const glm::vec2& c, bool reverse = false);
     void followSigns(glm::vec2& v, const glm::vec2& a);
     int intersect(const glm::vec2& p1, const glm::vec2& p2,
                   const glm::vec2& p3, const glm::vec2& p4,
                   glm::vec2& out, float* pts = nullptr);
+    bool intersecting(const glm::vec2& a, const glm::vec2& b,
+                      const glm::vec2& c, const glm::vec2& d);
     
-    // Color interpolation
     ofFloatColor colorBetween(const ofFloatColor& a, const ofFloatColor& b, float t);
     
-    // Catmull-Rom spline interpolation
     glm::vec2 catmullRom(const glm::vec2& p0, const glm::vec2& p1, 
                          const glm::vec2& p2, const glm::vec2& p3, float t);
     
-    // Smooth a polyline using Catmull-Rom splines
     void smoothPolyline(const std::vector<glm::vec2>& points,
                         const std::vector<ofFloatColor>& colors,
                         const std::vector<float>& widths,
@@ -318,38 +321,27 @@ namespace util {
 // Simple OF-Style API
 // ============================================================================
 
-// Draw an ofPolyline with current OF color and specified width
 void draw(const ofPolyline& polyline, float width = 2.0f);
-
-// Draw an ofPolyline with specified color and width
 void draw(const ofPolyline& polyline, const ofColor& color, float width = 2.0f);
-
-// Draw with per-vertex widths
 void draw(const ofPolyline& polyline, const ofColor& color, 
           const std::vector<float>& widths);
-
-// Draw with per-vertex colors and widths
 void draw(const ofPolyline& polyline, 
           const std::vector<ofColor>& colors,
           const std::vector<float>& widths);
 
-// Draw a simple line segment
 void drawLine(float x1, float y1, float x2, float y2, float width = 2.0f);
 void drawLine(const glm::vec2& p1, const glm::vec2& p2, float width = 2.0f);
 void drawLine(const glm::vec2& p1, const glm::vec2& p2, 
               const ofColor& color, float width = 2.0f);
-
-// Draw line with varying width (tapered)
 void drawLine(const glm::vec2& p1, const glm::vec2& p2,
               float width1, float width2);
 void drawLine(const glm::vec2& p1, const glm::vec2& p2,
               const ofColor& c1, const ofColor& c2,
               float width1, float width2);
 
-// Global settings
 void setJointStyle(JointStyle style);
 void setCapStyle(CapStyle style);
 void setFeather(bool enabled, float amount = 1.0f);
-Options& getOptions();  // For advanced customization
+Options& getOptions();
 
 } // namespace ofxVase

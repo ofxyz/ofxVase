@@ -10,17 +10,17 @@ namespace util {
 
 float normalize(glm::vec2& v) {
     float len = glm::length(v);
-    if (len > 0.00001f) {
+    if (len > 0.0000001f) {
         v /= len;
     }
     return len;
 }
 
 void perpen(glm::vec2& v) {
-    // Rotate 90 degrees clockwise (right-hand perpendicular)
-    float temp = v.x;
-    v.x = v.y;
-    v.y = -temp;
+    // Anti-clockwise 90 degrees: (x,y) -> (-y, x)
+    float y_value = v.y;
+    v.y = v.x;
+    v.x = -y_value;
 }
 
 void opposite(glm::vec2& v) {
@@ -36,10 +36,13 @@ void dot(const glm::vec2& a, const glm::vec2& b, glm::vec2& out) {
     out.y = a.y * b.y;
 }
 
-void anchorOutward(glm::vec2& v, const glm::vec2& b, const glm::vec2& c) {
+bool anchorOutward(glm::vec2& v, const glm::vec2& b, const glm::vec2& c, bool reverse) {
     float determinant = (b.x * v.x - c.x * v.x + b.y * v.y - c.y * v.y);
-    if (determinant <= 0) {
+    if ((determinant > 0) == (!reverse)) {
+        return false;
+    } else {
         v = -v;
+        return true;
     }
 }
 
@@ -48,26 +51,34 @@ void followSigns(glm::vec2& v, const glm::vec2& a) {
     if ((v.y > 0) != (a.y > 0)) v.y = -v.y;
 }
 
+void sameSideOfLine(glm::vec2& V, const glm::vec2& ref, const glm::vec2& a, const glm::vec2& b) {
+    float sign1 = signedArea(a + ref, a, b);
+    float sign2 = signedArea(a + V, a, b);
+    if ((sign1 >= 0) != (sign2 >= 0)) {
+        V = -V;
+    }
+}
+
 int intersect(const glm::vec2& p1, const glm::vec2& p2,
               const glm::vec2& p3, const glm::vec2& p4,
               glm::vec2& out, float* pts) {
-    float denom = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
-    float numera = (p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x);
-    float numerb = (p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x);
+    double denom = (double)(p4.y - p3.y) * (p2.x - p1.x) - (double)(p4.x - p3.x) * (p2.y - p1.y);
+    double numera = (double)(p4.x - p3.x) * (p1.y - p3.y) - (double)(p4.y - p3.y) * (p1.x - p3.x);
+    double numerb = (double)(p2.x - p1.x) * (p1.y - p3.y) - (double)(p2.y - p1.y) * (p1.x - p3.x);
     
-    const float eps = 0.00000001f;
+    const double eps = 0.0000000001;
     if (fabs(numera) < eps && fabs(numerb) < eps && fabs(denom) < eps) {
         out = (p1 + p2) * 0.5f;
-        return 2; // Lines coincide
+        return 2;
     }
     
     if (fabs(denom) < eps) {
         out = glm::vec2(0);
-        return 0; // Parallel
+        return 0;
     }
     
-    float mua = numera / denom;
-    float mub = numerb / denom;
+    float mua = (float)(numera / denom);
+    float mub = (float)(numerb / denom);
     if (pts) {
         pts[0] = mua;
         pts[1] = mub;
@@ -85,6 +96,11 @@ int intersect(const glm::vec2& p1, const glm::vec2& p2,
     return 1;
 }
 
+bool intersecting(const glm::vec2& a, const glm::vec2& b,
+                  const glm::vec2& c, const glm::vec2& d) {
+    return (signedArea(a, b, c) > 0) != (signedArea(a, b, d) > 0);
+}
+
 ofFloatColor colorBetween(const ofFloatColor& a, const ofFloatColor& b, float t) {
     t = glm::clamp(t, 0.0f, 1.0f);
     float kt = 1.0f - t;
@@ -100,7 +116,6 @@ glm::vec2 catmullRom(const glm::vec2& p0, const glm::vec2& p1,
                      const glm::vec2& p2, const glm::vec2& p3, float t) {
     float t2 = t * t;
     float t3 = t2 * t;
-    
     return 0.5f * (
         (2.0f * p1) +
         (-p0 + p2) * t +
@@ -130,33 +145,19 @@ void smoothPolyline(const std::vector<glm::vec2>& points,
     outWidths.reserve(outSize);
     
     for (int i = 0; i < n - 1; i++) {
-        // Get 4 control points for Catmull-Rom
         int i0 = std::max(0, i - 1);
         int i1 = i;
         int i2 = i + 1;
         int i3 = std::min(n - 1, i + 2);
         
-        const glm::vec2& p0 = points[i0];
-        const glm::vec2& p1 = points[i1];
-        const glm::vec2& p2 = points[i2];
-        const glm::vec2& p3 = points[i3];
-        
         for (int j = 0; j < subdivisions; j++) {
             float t = (float)j / subdivisions;
-            
-            // Interpolate position using Catmull-Rom
-            outPoints.push_back(catmullRom(p0, p1, p2, p3, t));
-            
-            // Linear interpolate color and width
-            float globalT = (i + t) / (n - 1);
-            float segT = t;
-            
-            outColors.push_back(colorBetween(colors[i1], colors[i2], segT));
-            outWidths.push_back(widths[i1] * (1.0f - segT) + widths[i2] * segT);
+            outPoints.push_back(catmullRom(points[i0], points[i1], points[i2], points[i3], t));
+            outColors.push_back(colorBetween(colors[i1], colors[i2], t));
+            outWidths.push_back(widths[i1] * (1.0f - t) + widths[i2] * t);
         }
     }
     
-    // Add final point
     outPoints.push_back(points.back());
     outColors.push_back(colors.back());
     outWidths.push_back(widths.back());
@@ -170,68 +171,50 @@ void smoothPolyline(const std::vector<glm::vec2>& points,
 
 void VertexArrayHolder::clear() {
     vertices.clear();
-    uvs.clear();
-    uvs2.clear();
     colors.clear();
     jumping = false;
 }
 
-void VertexArrayHolder::push(const glm::vec2& pos, const ofFloatColor& color, float rr) {
-    push(pos, color, rr, 0.0f);
-}
-
-void VertexArrayHolder::push(const glm::vec2& pos, const ofFloatColor& color, float rrX, float rrY) {
+int VertexArrayHolder::push(const glm::vec2& pos, const ofFloatColor& color) {
+    int cur = (int)vertices.size();
     vertices.push_back(glm::vec3(pos, 0));
-    
-    // Store rr values in texture coordinates for shader-based fade
-    // Also pre-multiply alpha for fallback non-shader rendering
-    ofFloatColor c = color;
-    // If rr is negative, this is a fade vertex (alpha = 0)
-    if (rrX < 0 || rrY < 0) {
-        c.a = 0.0f;
-    }
-    colors.push_back(c);
-    
-    // Pack rr values into UV for shader use
-    uvs.push_back(glm::vec2(rrX, rrY));
-    uvs2.push_back(glm::vec2(rrX, rrY));
+    colors.push_back(color);
     
     if (jumping) {
         jumping = false;
         repeatLastPush();
     }
+    return cur;
+}
+
+int VertexArrayHolder::pushF(const glm::vec2& pos, const ofFloatColor& color) {
+    ofFloatColor c = color;
+    c.a = 0;
+    return push(pos, c);
 }
 
 void VertexArrayHolder::push3(const glm::vec2& p1, const glm::vec2& p2, const glm::vec2& p3,
-                               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3,
-                               float rr1, float rr2, float rr3) {
-    push(p1, c1, rr1);
-    push(p2, c2, rr2);
-    push(p3, c3, rr3);
+                               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3) {
+    push(p1, c1);
+    push(p2, c2);
+    push(p3, c3);
 }
 
-void VertexArrayHolder::pushFade(const glm::vec2& pos, const ofFloatColor& color) {
-    ofFloatColor faded = color;
-    faded.a = 0;
-    push(pos, faded, 0);
+void VertexArrayHolder::push4(const glm::vec2& p1, const glm::vec2& p2, const glm::vec2& p3, const glm::vec2& p4,
+                               const ofFloatColor& c1, const ofFloatColor& c2, const ofFloatColor& c3, const ofFloatColor& c4) {
+    push3(p1, p2, p3, c1, c2, c3);
+    push3(p3, p2, p4, c3, c2, c4);
 }
 
 void VertexArrayHolder::push(const VertexArrayHolder& other) {
     if (glmode == other.glmode) {
         vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
         colors.insert(colors.end(), other.colors.begin(), other.colors.end());
-        uvs.insert(uvs.end(), other.uvs.begin(), other.uvs.end());
-        uvs2.insert(uvs2.end(), other.uvs2.begin(), other.uvs2.end());
     } else if (glmode == DRAW_TRIANGLES && other.glmode == DRAW_TRIANGLE_STRIP) {
-        // Convert strip to triangles
         for (size_t b = 2; b < other.vertices.size(); b++) {
-            for (int k = 0; k < 3; k++) {
-                size_t idx = b - 2 + k;
-                vertices.push_back(other.vertices[idx]);
-                colors.push_back(other.colors[idx]);
-                uvs.push_back(other.uvs[idx]);
-                uvs2.push_back(other.uvs2[idx]);
-            }
+            vertices.push_back(other.vertices[b-2]); colors.push_back(other.colors[b-2]);
+            vertices.push_back(other.vertices[b-1]); colors.push_back(other.colors[b-1]);
+            vertices.push_back(other.vertices[b]);   colors.push_back(other.colors[b]);
         }
     }
 }
@@ -247,12 +230,11 @@ ofMesh VertexArrayHolder::toMesh() const {
     ofMesh mesh;
     mesh.setMode(glmode == DRAW_TRIANGLES ? OF_PRIMITIVE_TRIANGLES : OF_PRIMITIVE_TRIANGLE_STRIP);
     
+    if (vertices.empty()) return mesh;
+    
     for (size_t i = 0; i < vertices.size(); i++) {
         mesh.addVertex(vertices[i]);
         mesh.addColor(colors[i]);
-        mesh.addTexCoord(uvs[i]);
-        // Note: OF mesh doesn't have built-in support for secondary UVs
-        // We'll pack them differently or use a custom attribute
     }
     
     return mesh;
@@ -269,26 +251,45 @@ void VertexArrayHolder::repeatLastPush() {
     if (vertices.empty()) return;
     vertices.push_back(vertices.back());
     colors.push_back(colors.back());
-    uvs.push_back(uvs.back());
-    uvs2.push_back(uvs2.back());
 }
 
 // ============================================================================
-// Polyline - Core Tessellation
+// Polyline - Core Tessellation (ported from C# reference)
 // ============================================================================
 
 void Polyline::determineTr(float w, float& t, float& R, float scale) {
-    // Simple direct mapping: t = half-width (radius), R = feather amount
-    // The width w is the full stroke width, so we use w/2 for the radius
-    (void)scale;  // Not used in simple mode
+    // Calibrated piecewise lookup table from the VASE reference
+    w *= scale;
+    float f = w - floorf(w);
     
-    t = w * 0.5f;  // Half-width = radius from center to edge
-    R = 1.5f;      // Fixed feather amount for anti-aliasing (when enabled)
-    
-    // Ensure minimum thickness for very thin lines
-    if (t < 0.5f) {
-        t = 0.5f;
+    if (w >= 0.0f && w < 1.0f) {
+        t = 0.05f;
+        R = 0.768f;
+    } else if (w >= 1.0f && w < 2.0f) {
+        t = 0.05f + f * 0.33f;
+        R = 0.768f + 0.312f * f;
+    } else if (w >= 2.0f && w < 3.0f) {
+        t = 0.38f + f * 0.58f;
+        R = 1.08f;
+    } else if (w >= 3.0f && w < 4.0f) {
+        t = 0.96f + f * 0.48f;
+        R = 1.08f;
+    } else if (w >= 4.0f && w < 5.0f) {
+        t = 1.44f + f * 0.46f;
+        R = 1.08f;
+    } else if (w >= 5.0f && w < 6.0f) {
+        t = 1.9f + f * 0.6f;
+        R = 1.08f;
+    } else if (w >= 6.0f) {
+        t = 2.5f + (w - 6.0f) * 0.50f;
+        R = 1.08f;
+    } else {
+        t = 0.05f;
+        R = 0.768f;
     }
+    
+    t /= scale;
+    R /= scale;
 }
 
 float Polyline::getPljRoundDangle(float t, float r, float scale) {
@@ -305,15 +306,12 @@ float Polyline::getPljRoundDangle(float t, float r, float scale) {
 void Polyline::makeTrc(const glm::vec2& P1, const glm::vec2& P2,
                        glm::vec2& T, glm::vec2& R, glm::vec2& C,
                        float w, const Options& opt,
-                       float& rr, float& tt, float& dist, bool anchorMode) {
+                       float& rr, float& tt, float& dist) {
     float t = 1.0f, r = 0.0f;
     
     determineTr(w, t, r, opt.worldToScreenRatio);
     if (opt.feather && !opt.noFeatherAtCore) {
         r *= opt.feathering;
-    }
-    if (anchorMode) {
-        t += r;
     }
     
     tt = t;
@@ -326,6 +324,10 @@ void Polyline::makeTrc(const glm::vec2& P1, const glm::vec2& P2,
     T = DP * t;
     R = DP * r;
 }
+
+// ============================================================================
+// Constructors
+// ============================================================================
 
 Polyline::Polyline(const std::vector<glm::vec2>& points,
                    const ofFloatColor& color,
@@ -355,7 +357,6 @@ Polyline::Polyline(const std::vector<glm::vec2>& points,
         }
     }
     
-    // Simple case: just 2 points = single segment
     if (length == 2) {
         StAnchor SA;
         SA.P[0] = points[0];
@@ -369,8 +370,46 @@ Polyline::Polyline(const std::vector<glm::vec2>& points,
         return;
     }
     
-    // Multi-point polyline
-    polylineRange(points, colors, widths, localOpt, inopt, 0, length - 1, false);
+    // Use the smart approx/exact switching from the reference
+    int A = 0, B = 0;
+    bool on = false;
+    for (int i = 1; i < length - 1; i++) {
+        glm::vec2 V1 = points[i] - points[i-1];
+        glm::vec2 V2 = points[i+1] - points[i];
+        float len = 0;
+        len += util::normalize(V1) * 0.5f;
+        len += util::normalize(V2) * 0.5f;
+        float costho = V1.x * V2.x + V1.y * V2.y;
+        const float m_pi = glm::pi<float>();
+        float cos_a = cosf(15 * m_pi / 180);
+        float cos_b = cosf(10 * m_pi / 180);
+        float cos_c = cosf(25 * m_pi / 180);
+        bool approx = false;
+        if ((width * localOpt.worldToScreenRatio < 7 && costho > cos_a) ||
+            (costho > cos_b) ||
+            (len < width && costho > cos_c)) {
+            approx = true;
+        }
+        if (approx && !on) {
+            A = i;
+            on = true;
+            if (A == 1) A = 0;
+            if (A > 1) {
+                polylineRange(points, colors, widths, localOpt, inopt, B, A, false);
+            }
+        } else if (!approx && on) {
+            B = i;
+            on = false;
+            polylineRange(points, colors, widths, localOpt, inopt, A, B, true);
+        }
+    }
+    if (on && B < length - 1) {
+        B = length - 1;
+        polylineRange(points, colors, widths, localOpt, inopt, A, B, true);
+    } else if (!on && A < length - 1) {
+        A = length - 1;
+        polylineRange(points, colors, widths, localOpt, inopt, B, A, false);
+    }
     holder = inopt.holder;
 }
 
@@ -380,13 +419,11 @@ Polyline::Polyline(const std::vector<glm::vec2>& points,
                    const Options& opt) {
     InternalOpt inopt;
     
-    // Apply smoothing if requested
     if (opt.smoothing > 0 && points.size() >= 2) {
         std::vector<glm::vec2> smoothPts;
         std::vector<ofFloatColor> smoothColors;
         std::vector<float> smoothWidths;
         
-        // Expand single color/width to match points
         std::vector<ofFloatColor> expandedColors = colors;
         std::vector<float> expandedWidths = widths;
         if (colors.size() == 1) {
@@ -428,23 +465,30 @@ Polyline::Polyline(const ofPolyline& poly,
     *this = Polyline(points, color, width, opt);
 }
 
+// ============================================================================
+// Polyline range and routing
+// ============================================================================
+
 void Polyline::polylineRange(const std::vector<glm::vec2>& P,
                               const std::vector<ofFloatColor>& C,
                               const std::vector<float>& W,
                               const Options& opt, InternalOpt& inopt,
                               int from, int to, bool approx) {
+    InternalOpt localInopt = inopt;
     if (from > 0) from--;
     
-    inopt.joinFirst = (from != 0);
-    inopt.joinLast = (to != static_cast<int>(P.size()) - 1);
-    inopt.noCapFirst = inopt.noCapFirst || inopt.joinFirst;
-    inopt.noCapLast = inopt.noCapLast || inopt.joinLast;
+    localInopt.joinFirst = (from != 0);
+    localInopt.joinLast = (to != static_cast<int>(P.size()) - 1);
+    localInopt.noCapFirst = inopt.noCapFirst || localInopt.joinFirst;
+    localInopt.noCapLast = inopt.noCapLast || localInopt.joinLast;
     
     if (approx) {
-        polylineApprox(P, C, W, opt, inopt, from, to);
+        polylineApprox(P, C, W, opt, localInopt, from, to);
     } else {
-        polylineExact(P, C, W, opt, inopt, from, to);
+        polylineExact(P, C, W, opt, localInopt, from, to);
     }
+    
+    inopt.holder.push(localInopt.holder);
 }
 
 void Polyline::polylineApprox(const std::vector<glm::vec2>& P,
@@ -452,8 +496,136 @@ void Polyline::polylineApprox(const std::vector<glm::vec2>& P,
                                const std::vector<float>& W,
                                const Options& opt, InternalOpt& inopt,
                                int from, int to) {
-    // Simplified approximation - just use exact for now
-    polylineExact(P, C, W, opt, inopt, from, to);
+    if (to - from + 1 < 2) return;
+    bool capFirst = !inopt.noCapFirst;
+    bool capLast = !inopt.noCapLast;
+    bool joinFirst = inopt.joinFirst;
+    bool joinLast = inopt.joinLast;
+    
+    VertexArrayHolder vcore, vfadeo, vfadei;
+    vcore.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+    vfadeo.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+    vfadei.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+    
+    auto color = [&](int i) -> ofFloatColor {
+        return C[inopt.constColor ? 0 : i];
+    };
+    auto weight = [&](int i) -> float {
+        return W[inopt.constWeight ? 0 : i];
+    };
+    
+    auto polyStep = [&](int i, const glm::vec2& pp, float ww, const ofFloatColor& cc) {
+        float t = 0, r = 0;
+        determineTr(ww, t, r, opt.worldToScreenRatio);
+        if (opt.feather && !opt.noFeatherAtCore) {
+            r *= opt.feathering;
+        }
+        glm::vec2 V = P[i] - P[i-1];
+        util::perpen(V);
+        util::normalize(V);
+        glm::vec2 F = V * r;
+        V *= t;
+        vcore.push(pp + V, cc);
+        vcore.push(pp - V, cc);
+        vfadeo.push(pp + V, cc);
+        vfadeo.pushF(pp + V + F, cc);
+        vfadei.push(pp - V, cc);
+        vfadei.pushF(pp - V - F, cc);
+    };
+    
+    for (int i = from + 1; i < to; i++) {
+        polyStep(i, P[i], weight(i), color(i));
+    }
+    
+    // Last mid point
+    glm::vec2 P_las, P_fir;
+    ofFloatColor C_las, C_fir;
+    float W_las = 0, W_fir = 0;
+    
+    // Compute last midpoint
+    float tLas = 0.5f;
+    P_las = (P[to-1] + P[to]) * tLas;
+    C_las = util::colorBetween(color(to-1), color(to), tLas);
+    W_las = (weight(to-1) + weight(to)) * tLas;
+    polyStep(to, P_las, W_las, C_las);
+    
+    // First cap
+    StAnchor SA;
+    float tFir = joinFirst ? 0.5f : 0.0f;
+    if (tFir == 0.0f) {
+        P_fir = P[from]; C_fir = color(from); W_fir = weight(from);
+    } else {
+        P_fir = (P[from] + P[from+1]) * tFir;
+        C_fir = util::colorBetween(color(from), color(from+1), tFir);
+        W_fir = (weight(from) + weight(from+1)) * tFir;
+    }
+    SA.P[0] = P_fir;
+    SA.P[1] = P[from + 1];
+    SA.C[0] = C_fir;
+    SA.C[1] = color(from + 1);
+    SA.W[0] = W_fir;
+    SA.W[1] = weight(from + 1);
+    segment(SA, opt, capFirst, false, true);
+    
+    // Last cap
+    if (!joinLast) {
+        SA.P[0] = P_las;
+        SA.P[1] = P[to];
+        SA.C[0] = C_las;
+        SA.C[1] = color(to);
+        SA.W[0] = W_las;
+        SA.W[1] = weight(to);
+        segment(SA, opt, false, capLast, true);
+    }
+    
+    inopt.holder.push(vcore);
+    inopt.holder.push(vfadeo);
+    inopt.holder.push(vfadei);
+    inopt.holder.push(SA.vah);
+}
+
+void Polyline::brushArc(VertexArrayHolder& tris,
+                         const glm::vec2& center, const ofFloatColor& col,
+                         float t, float r,
+                         const glm::vec2& N_start, const glm::vec2& N_end,
+                         float wsr) {
+    const float pi2 = glm::pi<float>() * 2.0f;
+    
+    float a_start = atan2f(N_start.y, N_start.x);
+    float a_end = atan2f(N_end.y, N_end.x);
+    float diff = a_end - a_start;
+    if (diff < 0) diff += pi2;
+    if (diff > pi2) diff -= pi2;
+    if (diff < 0.001f) return;
+    
+    float dangle = getPljRoundDangle(t, r, wsr);
+    int steps = std::max(1, static_cast<int>(diff / dangle));
+    
+    ofFloatColor fadeCol = col;
+    fadeCol.a = 0.0f;
+    float R = t + r;
+    
+    for (int j = 0; j < steps; j++) {
+        float a1 = a_start + diff * j / steps;
+        float a2 = a_start + diff * (j + 1) / steps;
+        
+        glm::vec2 d1(cosf(a1), sinf(a1));
+        glm::vec2 d2(cosf(a2), sinf(a2));
+        
+        glm::vec2 p1 = center + t * d1;
+        glm::vec2 p2 = center + t * d2;
+        
+        tris.push3(center, p1, p2, col, col, col);
+        
+        glm::vec2 f1 = center + R * d1;
+        glm::vec2 f2 = center + R * d2;
+        tris.push(p1, col);
+        tris.push(p2, col);
+        tris.pushF(f1, col);
+        tris.push(p2, col);
+        tris.pushF(f1, col);
+        tris.pushF(f2, col);
+    }
 }
 
 void Polyline::polylineExact(const std::vector<glm::vec2>& P,
@@ -463,8 +635,6 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
                               int from, int to) {
     bool capFirst = !inopt.noCapFirst;
     bool capLast = !inopt.noCapLast;
-    bool joinFirst = inopt.joinFirst;
-    bool joinLast = inopt.joinLast;
     
     auto color = [&](int i) -> ofFloatColor {
         return C[inopt.constColor ? 0 : i];
@@ -473,72 +643,135 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
         return W[inopt.constWeight ? 0 : i];
     };
     
-    glm::vec2 mid_l, mid_n;
-    ofFloatColor c_l, c_n;
-    float w_l = 0, w_n = 0;
+    int n = to - from + 1;
+    if (n < 2) return;
     
-    // Init for first anchor
-    if (joinFirst) {
-        mid_l = (P[from] + P[from + 1]) * 0.5f;
-        c_l = util::colorBetween(color(from), color(from + 1), 0.5f);
-        w_l = (weight(from) + weight(from + 1)) * 0.5f;
-    } else {
-        mid_l = P[from];
-        c_l = color(from);
-        w_l = weight(from);
+    struct VtxInfo {
+        glm::vec2 pos;
+        float t, r;
+        ofFloatColor col;
+    };
+    
+    std::vector<VtxInfo> V(n);
+    for (int i = 0; i < n; i++) {
+        int idx = from + i;
+        V[i].pos = P[idx];
+        V[i].col = color(idx);
+        determineTr(weight(idx), V[i].t, V[i].r, opt.worldToScreenRatio);
+        if (opt.feather && !opt.noFeatherAtCore)
+            V[i].r *= opt.feathering;
     }
     
-    StAnchor SA;
+    struct SegTan {
+        glm::vec2 N_top, N_bot;
+    };
+    std::vector<SegTan> seg(n - 1);
     
-    if (to - from + 1 == 2) {
-        // Just 2 points - single segment
-        SA.P[0] = P[from];
-        SA.P[1] = P[from + 1];
-        SA.C[0] = color(from);
-        SA.C[1] = color(from + 1);
-        SA.W[0] = weight(from);
-        SA.W[1] = weight(from + 1);
-        segment(SA, opt, capFirst, capLast, true);
-    } else {
-        // Multiple segments with anchors
-        for (int i = from + 1; i < to; i++) {
-            if (i == to - 1 && !joinLast) {
-                mid_n = P[i + 1];
-                c_n = color(i + 1);
-                w_n = weight(i + 1);
-            } else {
-                mid_n = (P[i] + P[i + 1]) * 0.5f;
-                c_n = util::colorBetween(color(i), color(i + 1), 0.5f);
-                w_n = (weight(i) + weight(i + 1)) * 0.5f;
-            }
+    for (int i = 0; i < n - 1; i++) {
+        glm::vec2 D = V[i+1].pos - V[i].pos;
+        float d = glm::length(D);
+        
+        float R1 = V[i].t + V[i].r;
+        float R2 = V[i+1].t + V[i+1].r;
+        
+        if (d < 0.001f) {
+            seg[i].N_top = glm::vec2(0, 1);
+            seg[i].N_bot = glm::vec2(0, -1);
+            continue;
+        }
+        
+        glm::vec2 u = D / d;
+        glm::vec2 nn(-u.y, u.x);
+        
+        float sinA = glm::clamp((R1 - R2) / d, -0.999f, 0.999f);
+        float cosA = sqrtf(1.0f - sinA * sinA);
+        
+        seg[i].N_top = sinA * u + cosA * nn;
+        seg[i].N_bot = sinA * u - cosA * nn;
+    }
+    
+    VertexArrayHolder tris;
+    tris.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLES);
+    
+    // Full brush disc at each vertex
+    for (int i = 0; i < n; i++) {
+        auto& v = V[i];
+        const float pi2 = glm::pi<float>() * 2.0f;
+        float dangle = getPljRoundDangle(v.t, v.r, opt.worldToScreenRatio);
+        int steps = std::max(8, static_cast<int>(pi2 / dangle));
+        float R = v.t + v.r;
+        
+        for (int j = 0; j < steps; j++) {
+            float a1 = pi2 * j / steps;
+            float a2 = pi2 * (j + 1) / steps;
+            glm::vec2 d1(cosf(a1), sinf(a1));
+            glm::vec2 d2(cosf(a2), sinf(a2));
             
-            SA.P[0] = mid_l;
-            SA.C[0] = c_l;
-            SA.W[0] = w_l;
-            SA.P[2] = mid_n;
-            SA.C[2] = c_n;
-            SA.W[2] = w_n;
+            glm::vec2 p1 = v.pos + v.t * d1;
+            glm::vec2 p2 = v.pos + v.t * d2;
+            tris.push3(v.pos, p1, p2, v.col, v.col, v.col);
             
-            SA.P[1] = P[i];
-            SA.C[1] = color(i);
-            SA.W[1] = weight(i);
-            
-            anchor(SA, opt, (i == from + 1) && capFirst, (i == to - 1) && capLast);
-            
-            mid_l = mid_n;
-            c_l = c_n;
-            w_l = w_n;
+            glm::vec2 f1 = v.pos + R * d1;
+            glm::vec2 f2 = v.pos + R * d2;
+            tris.push(p1, v.col);
+            tris.push(p2, v.col);
+            tris.pushF(f1, v.col);
+            tris.push(p2, v.col);
+            tris.pushF(f1, v.col);
+            tris.pushF(f2, v.col);
         }
     }
     
-    inopt.holder.push(SA.vah);
+    // Segment bodies
+    for (int i = 0; i < n - 1; i++) {
+        auto& v1 = V[i];
+        auto& v2 = V[i+1];
+        auto& st = seg[i];
+        
+        glm::vec2 T1t = v1.pos + v1.t * st.N_top;
+        glm::vec2 T1b = v1.pos + v1.t * st.N_bot;
+        glm::vec2 T2t = v2.pos + v2.t * st.N_top;
+        glm::vec2 T2b = v2.pos + v2.t * st.N_bot;
+        
+        float R1 = v1.t + v1.r;
+        float R2 = v2.t + v2.r;
+        glm::vec2 F1t = v1.pos + R1 * st.N_top;
+        glm::vec2 F1b = v1.pos + R1 * st.N_bot;
+        glm::vec2 F2t = v2.pos + R2 * st.N_top;
+        glm::vec2 F2b = v2.pos + R2 * st.N_bot;
+        
+        tris.push3(T1t, T2t, T2b, v1.col, v2.col, v2.col);
+        tris.push3(T1t, T2b, T1b, v1.col, v2.col, v1.col);
+        
+        tris.push(T1t, v1.col);
+        tris.push(T2t, v2.col);
+        tris.pushF(F1t, v1.col);
+        tris.push(T2t, v2.col);
+        tris.pushF(F1t, v1.col);
+        tris.pushF(F2t, v2.col);
+        
+        tris.push(T1b, v1.col);
+        tris.push(T2b, v2.col);
+        tris.pushF(F1b, v1.col);
+        tris.push(T2b, v2.col);
+        tris.pushF(F1b, v1.col);
+        tris.pushF(F2b, v2.col);
+    }
+    
+    // Joint arcs and caps are handled by the full disc stamps above.
+    
+    inopt.holder.push(tris);
 }
+
+// ============================================================================
+// Segment
+// ============================================================================
 
 void Polyline::segment(StAnchor& SA, const Options& opt,
                         bool capFirst, bool capLast, bool core) {
     float* weight = SA.W;
     glm::vec2 P[2] = { SA.P[0], SA.P[1] };
-    ofFloatColor C[2] = { SA.C[0], SA.C[1] };
+    ofFloatColor C[3] = { SA.C[0], SA.C[1] };
     
     glm::vec2 T2, R2, bR;
     float t = 0, r = 0;
@@ -548,16 +781,16 @@ void Polyline::segment(StAnchor& SA, const Options& opt,
     glm::vec2 capStart(0), capEnd(0);
     StPolyline SL[2];
     
-    // First point
     {
         float dd = 0;
-        makeTrc(P[0], P[1], T2, R2, bR, weight[0], opt, r, t, dd, false);
+        makeTrc(P[0], P[1], T2, R2, bR, weight[0], opt, r, t, dd);
         
         if (capFirst) {
             if (opt.cap == CapStyle::Square) {
                 P[0] -= bR * (t + r);
             }
-            capStart = -bR;
+            capStart = bR;
+            util::opposite(capStart);
             if (opt.feather && !opt.noFeatherAtCap) {
                 capStart *= opt.feathering;
             }
@@ -568,16 +801,14 @@ void Polyline::segment(StAnchor& SA, const Options& opt,
         SL[0].r = r;
         SL[0].T = T2;
         SL[0].R = R2;
-        SL[0].bR = bR;
+        SL[0].bR = bR * 0.01f;
         SL[0].degenT = false;
-        SL[0].degenR = false;
     }
     
-    // Second point
     {
         float dd = 0;
         if (varying_weight) {
-            makeTrc(P[0], P[1], T2, R2, bR, weight[1], opt, r, t, dd, false);
+            makeTrc(P[0], P[1], T2, R2, bR, weight[1], opt, r, t, dd);
         }
         
         if (capLast) {
@@ -595,9 +826,8 @@ void Polyline::segment(StAnchor& SA, const Options& opt,
         SL[1].r = r;
         SL[1].T = T2;
         SL[1].R = R2;
-        SL[1].bR = bR;
+        SL[1].bR = bR * 0.01f;
         SL[1].degenT = false;
-        SL[1].degenR = false;
     }
     
     segmentLate(opt, P, C, SL, SA.vah, capStart, capEnd, core);
@@ -611,329 +841,816 @@ void Polyline::segmentLate(const Options& opt,
     
     glm::vec2 P_0 = P[0];
     glm::vec2 P_1 = P[1];
+    if (SL[0].djoint == static_cast<char>(CapStyle::Butt) ||
+        SL[0].djoint == static_cast<char>(CapStyle::Square))
+        P_0 -= cap1;
+    if (SL[1].djoint == static_cast<char>(CapStyle::Butt) ||
+        SL[1].djoint == static_cast<char>(CapStyle::Square))
+        P_1 -= cap2;
     
-    // P1-P4: outer edge (with fade)
-    // P1r-P4r: inner edge (core, full alpha)
-    glm::vec2 P1, P2, P3, P4;
-    glm::vec2 P1c, P2c, P3c, P4c;
-    glm::vec2 P1r, P2r, P3r, P4r;
+    // Core edge points
+    glm::vec2 P1 = P_0 + SL[0].T;
+    glm::vec2 P2 = P_0 - SL[0].T;
+    glm::vec2 P3 = P_1 + SL[1].T;
+    glm::vec2 P4 = P_1 - SL[1].T;
     
-    float s0 = 1, s1 = 1;
-    if (SL[0].t < SL[1].t) {
-        s0 = (SL[0].t + SL[0].r) / (SL[1].t + SL[1].r);
-    }
-    if (SL[1].t < SL[0].t) {
-        s1 = (SL[1].t + SL[1].r) / (SL[0].t + SL[0].r);
-    }
-    
-    // Outer edge points (where alpha = 0 if feathering)
-    P1 = P_0 + SL[0].T + SL[0].R;
-    P2 = P_0 - SL[0].T - SL[0].R;
-    P3 = P_1 + SL[1].T + SL[1].R;
-    P4 = P_1 - SL[1].T - SL[1].R;
-    
-    // Inner edge points (core, full alpha)
-    P1r = P_0 + SL[0].T;
-    P2r = P_0 - SL[0].T;
-    P3r = P_1 + SL[1].T;
-    P4r = P_1 - SL[1].T;
+    // Fade edge points (core + R)
+    glm::vec2 P1r = P1 + SL[0].R;
+    glm::vec2 P2r = P2 - SL[0].R;
+    glm::vec2 P3r = P3 + SL[1].R;
+    glm::vec2 P4r = P4 - SL[1].R;
     
     // Cap extension points
-    P1c = P1 + cap1 * s0;
-    P2c = P2 + cap1 * s0;
-    P3c = P3 + cap2 * s1;
-    P4c = P4 + cap2 * s1;
+    glm::vec2 P1c = P1r + cap1;
+    glm::vec2 P2c = P2r + cap1;
+    glm::vec2 P3c = P3r + cap2;
+    glm::vec2 P4c = P4r + cap2;
     
-    // Core - solid triangles (full alpha)
     if (core) {
-        // Two triangles for the solid core
-        tris.push3(P1r, P3r, P2r, C[0], C[1], C[0], 0, 0, 0);
-        tris.push3(P2r, P3r, P4r, C[0], C[1], C[1], 0, 0, 0);
+        // Core quad (opaque)
+        tris.push3(P1, P2, P3, C[0], C[0], C[1]);
+        tris.push3(P2, P3, P4, C[0], C[1], C[1]);
+        
+        // Top fade strip (P1r/P3r transparent)
+        tris.push(P1, C[0]);
+        tris.pushF(P1r, C[0]);
+        tris.push(P3, C[1]);
+        tris.pushF(P1r, C[0]);
+        tris.push(P3, C[1]);
+        tris.pushF(P3r, C[1]);
+        
+        // Bottom fade strip (P2r/P4r transparent)
+        tris.push(P2, C[0]);
+        tris.pushF(P2r, C[0]);
+        tris.push(P4, C[1]);
+        tris.pushF(P2r, C[0]);
+        tris.push(P4, C[1]);
+        tris.pushF(P4r, C[1]);
     }
     
-    // Feathering - fade triangles around the core
-    if (opt.feather && SL[0].r > 0.001f) {
-        // Create faded colors
-        ofFloatColor C0_fade = C[0]; C0_fade.a = 0;
-        ofFloatColor C1_fade = C[1]; C1_fade.a = 0;
-        
-        // Top fade strip (P1r -> P1, P3r -> P3)
-        tris.push3(P1r, P3r, P1, C[0], C[1], C0_fade, 0, 0, 0);
-        tris.push3(P1, P3r, P3, C0_fade, C[1], C1_fade, 0, 0, 0);
-        
-        // Bottom fade strip (P2r -> P2, P4r -> P4)
-        tris.push3(P2r, P2, P4r, C[0], C0_fade, C[1], 0, 0, 0);
-        tris.push3(P2, P4, P4r, C0_fade, C1_fade, C[1], 0, 0, 0);
-    }
-    
-    // Draw caps
+    // Caps
     for (int j = 0; j < 2; j++) {
         glm::vec2 cur_cap = j == 0 ? cap1 : cap2;
         if (glm::length(cur_cap) < 0.001f) continue;
         
         if (SL[j].djoint == static_cast<char>(CapStyle::Round)) {
-            // Round cap - draw a semicircle as a triangle fan
-            glm::vec2 O = j == 0 ? P_0 : P_1;
-            float coreRadius = SL[j].t;
+            VertexArrayHolder cap;
+            cap.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+            glm::vec2 O = P[j];
+            float dangle = getPljRoundDangle(SL[j].t, SL[j].r, opt.worldToScreenRatio);
             
-            // Get the direction the cap extends (outward from segment)
-            glm::vec2 capDir = glm::normalize(cur_cap);
+            glm::vec2 bRcap = SL[j].bR;
+            util::followSigns(bRcap, j == 0 ? cap1 : cap2);
             
-            // Get perpendicular to cap direction (the edge direction)
-            glm::vec2 edgeDir(-capDir.y, capDir.x);
+            glm::vec2 app_P = O + SL[j].T;
             
-            // The two edge points where the cap meets the segment
-            glm::vec2 edgeP1 = O + edgeDir * coreRadius;
-            glm::vec2 edgeP2 = O - edgeDir * coreRadius;
+            // Core arc
+            vectorsToArc(cap, O, C[j], C[j],
+                         SL[j].T + bRcap, -SL[j].T + bRcap,
+                         dangle, SL[j].t, 0.0f, false, app_P,
+                         j == 0 ? cap1 : cap2, 0, false);
+            cap.push(O - SL[j].T, C[j]);
+            cap.push(app_P, C[j]);
             
-            // Draw semicircle from edgeP1 to edgeP2, curving outward in capDir
-            int segments = std::max(12, (int)(coreRadius * 0.5f));
+            cap.jump();
             
-            for (int i = 0; i < segments; i++) {
-                // Angle from -90 to +90 degrees relative to capDir
-                float t1 = (float)i / segments;
-                float t2 = (float)(i + 1) / segments;
-                float angle1 = glm::mix(-glm::half_pi<float>(), glm::half_pi<float>(), t1);
-                float angle2 = glm::mix(-glm::half_pi<float>(), glm::half_pi<float>(), t2);
-                
-                // Rotate capDir by angle to get arc points
-                glm::vec2 dir1(capDir.x * cos(angle1) - capDir.y * sin(angle1),
-                               capDir.x * sin(angle1) + capDir.y * cos(angle1));
-                glm::vec2 dir2(capDir.x * cos(angle2) - capDir.y * sin(angle2),
-                               capDir.x * sin(angle2) + capDir.y * cos(angle2));
-                
-                glm::vec2 p1 = O + dir1 * coreRadius;
-                glm::vec2 p2 = O + dir2 * coreRadius;
-                
-                // Triangle from center to two arc points
-                tris.push3(O, p1, p2, C[j], C[j], C[j], 0, 0, 0);
-            }
+            // Fade arc
+            ofFloatColor C2 = C[j]; C2.a = 0.0f;
+            glm::vec2 a1 = O + SL[j].T;
+            glm::vec2 a2 = O + SL[j].T * (1.0f / SL[j].t) * (SL[j].t + SL[j].r);
+            glm::vec2 b1 = O - SL[j].T;
+            glm::vec2 b2 = O - SL[j].T * (1.0f / SL[j].t) * (SL[j].t + SL[j].r);
+            
+            cap.push(a1, C[j]);
+            cap.push(a2, C2);
+            vectorsToArc(cap, O, C[j], C2,
+                         SL[j].T + bRcap, -SL[j].T + bRcap,
+                         dangle, SL[j].t, SL[j].t + SL[j].r, false, O,
+                         j == 0 ? cap1 : cap2, 0, false);
+            cap.push(b1, C[j]);
+            cap.push(b2, C2);
+            
+            tris.push(cap);
         } else if (SL[j].djoint == static_cast<char>(CapStyle::Rect) ||
                    SL[j].djoint == static_cast<char>(CapStyle::Square)) {
-            // Square/Rect cap
-            glm::vec2 O = j == 0 ? P_0 : P_1;
-            glm::vec2 capDir = glm::normalize(cur_cap);
-            glm::vec2 perp = glm::normalize(SL[j].T);
+            VertexArrayHolder cap;
+            cap.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
             
-            float coreRadius = SL[j].t;
-            float fullRadius = SL[j].t + SL[j].r;
-            float capLen = SL[j].t + SL[j].r;
-            
-            // Core quad
-            glm::vec2 c1 = O + perp * coreRadius;
-            glm::vec2 c2 = O - perp * coreRadius;
-            glm::vec2 c3 = O + perp * coreRadius + capDir * capLen;
-            glm::vec2 c4 = O - perp * coreRadius + capDir * capLen;
-            
-            tris.push3(c1, c2, c3, C[j], C[j], C[j], 0, 0, 0);
-            tris.push3(c2, c4, c3, C[j], C[j], C[j], 0, 0, 0);
-            
-            // Fade edges if feathering
-            if (opt.feather && SL[j].r > 0.001f) {
-                ofFloatColor Cj_fade = C[j];
-                Cj_fade.a = 0;
-                
-                glm::vec2 o1 = O + perp * fullRadius;
-                glm::vec2 o2 = O - perp * fullRadius;
-                glm::vec2 o3 = O + perp * fullRadius + capDir * capLen;
-                glm::vec2 o4 = O - perp * fullRadius + capDir * capLen;
-                
-                // Side fades
-                tris.push3(c1, o1, c3, C[j], Cj_fade, C[j], 0, 0, 0);
-                tris.push3(o1, o3, c3, Cj_fade, Cj_fade, C[j], 0, 0, 0);
-                tris.push3(c2, c4, o2, C[j], C[j], Cj_fade, 0, 0, 0);
-                tris.push3(o2, c4, o4, Cj_fade, C[j], Cj_fade, 0, 0, 0);
-                
-                // End fade
-                tris.push3(c3, o3, c4, C[j], Cj_fade, C[j], 0, 0, 0);
-                tris.push3(o3, o4, c4, Cj_fade, Cj_fade, C[j], 0, 0, 0);
+            glm::vec2 Pj, Pjr, Pjc, Pk, Pkr, Pkc;
+            if (j == 0) {
+                Pj = P1; Pjr = P1r; Pjc = P1c;
+                Pk = P2; Pkr = P2r; Pkc = P2c;
+            } else {
+                Pj = P3; Pjr = P3r; Pjc = P3c;
+                Pk = P4; Pkr = P4r; Pkc = P4c;
             }
+            
+            cap.pushF(Pkr, C[j]);
+            cap.pushF(Pkc, C[j]);
+            cap.push(Pk, C[j]);
+            cap.pushF(Pjc, C[j]);
+            cap.push(Pj, C[j]);
+            cap.pushF(Pjr, C[j]);
+            
+            tris.push(cap);
         }
     }
 }
 
+// ============================================================================
+// Anchor - Joint handling (ported from C# reference)
+// ============================================================================
+
 void Polyline::anchor(StAnchor& SA, const Options& opt, bool capFirst, bool capLast) {
     glm::vec2* P = SA.P;
     ofFloatColor* C = SA.C;
-    float* W = SA.W;
+    float* weight = SA.W;
+    StPolyline* SL = SA.SL;
     
-    // Get directions and normals for both segments
-    glm::vec2 dir1 = glm::normalize(P[1] - P[0]);
-    glm::vec2 dir2 = glm::normalize(P[2] - P[1]);
-    glm::vec2 norm1(-dir1.y, dir1.x);
-    glm::vec2 norm2(-dir2.y, dir2.x);
+    for (int i = 0; i < 3; i++) SL[i] = StPolyline{};
+    SA.vah.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLES);
+    SA.capStart = glm::vec2(0);
+    SA.capEnd = glm::vec2(0);
     
-    // Calculate thickness at the joint
-    float t1 = 0, r1 = 0;
-    determineTr(W[1], t1, r1, opt.worldToScreenRatio);
+    const float cos_cri_angle = 0.979386f;
+    bool varying_weight = !(weight[0] == weight[1] && weight[1] == weight[2]);
     
-    float coreWidth = t1;           // Core (solid) width
-    float fullWidth = t1 + r1;      // Full width including fade
+    float combined_weight = weight[1] + (opt.feather ? opt.feathering : 0.0f);
+    if (combined_weight < 1.6f) {
+        segment(SA, opt, capFirst, false, true);
+        Options opt2 = opt;
+        opt2.cap = (opt.joint == JointStyle::Round) ? CapStyle::Round : CapStyle::Butt;
+        SA.P[0] = SA.P[1]; SA.P[1] = SA.P[2];
+        SA.C[0] = SA.C[1]; SA.C[1] = SA.C[2];
+        SA.W[0] = SA.W[1]; SA.W[1] = SA.W[2];
+        segment(SA, opt2, false, capLast, true);
+        return;
+    }
     
-    // Determine which side the joint is on (cross product)
-    float cross = dir1.x * dir2.y - dir1.y * dir2.x;
+    glm::vec2 T1, T2, T21, T31;
+    glm::vec2 R1, R2, R21, R31;
     
-    // Core points (solid fill) for joint
-    glm::vec2 P1a_core = P[1] + norm1 * coreWidth;
-    glm::vec2 P1b_core = P[1] - norm1 * coreWidth;
-    glm::vec2 P2a_core = P[1] + norm2 * coreWidth;
-    glm::vec2 P2b_core = P[1] - norm2 * coreWidth;
-    
-    // Outer points (fade ends) for joint
-    glm::vec2 P1a_outer = P[1] + norm1 * fullWidth;
-    glm::vec2 P1b_outer = P[1] - norm1 * fullWidth;
-    glm::vec2 P2a_outer = P[1] + norm2 * fullWidth;
-    glm::vec2 P2b_outer = P[1] - norm2 * fullWidth;
-    
-    // Draw first segment (from P[0] to P[1])
-    StAnchor seg1;
-    seg1.P[0] = P[0];
-    seg1.P[1] = P[1];
-    seg1.C[0] = C[0];
-    seg1.C[1] = C[1];
-    seg1.W[0] = W[0];
-    seg1.W[1] = W[1];
-    segment(seg1, opt, capFirst, false, true);
-    SA.vah.push(seg1.vah);
-    
-    // Fill the joint gap with a rounded arc on the outside of the turn
-    const float crossThreshold = 0.0001f;
-    if (std::abs(cross) > crossThreshold) {
-        // Determine which edge points to use based on turn direction
-        glm::vec2 edgeA, edgeB;  // The two edge points we need to connect
-        if (cross > 0) {
-            // Turning left - gap is on the negative normal side (b points)
-            edgeA = P1b_core;  // End of segment 1
-            edgeB = P2b_core;  // Start of segment 2
-        } else {
-            // Turning right - gap is on the positive normal side (a points)
-            edgeA = P1a_core;
-            edgeB = P2a_core;
-        }
-        
-        // Simple approach: interpolate along arc from edgeA to edgeB
-        // Use spherical-ish interpolation to maintain radius
-        glm::vec2 dirA = edgeA - P[1];
-        glm::vec2 dirB = edgeB - P[1];
-        float radiusA = glm::length(dirA);
-        float radiusB = glm::length(dirB);
-        float avgRadius = (radiusA + radiusB) * 0.5f;
-        
-        // Normalize directions
-        if (radiusA > 0.001f) dirA /= radiusA;
-        if (radiusB > 0.001f) dirB /= radiusB;
-        
-        // Calculate angle between the two directions
-        float dotVal = glm::clamp(glm::dot(dirA, dirB), -1.0f, 1.0f);
-        float angle = acos(dotVal);
-        
-        // Number of segments based on angle
-        int segments = std::max(2, (int)(angle * avgRadius * 0.3f));
-        
-        // Draw fan of triangles
-        glm::vec2 prevPoint = edgeA;
-        for (int i = 1; i <= segments; i++) {
-            float t = (float)i / segments;
-            
-            // Spherical interpolation of direction
-            glm::vec2 interpDir = glm::normalize(dirA * (1.0f - t) + dirB * t);
-            float interpRadius = radiusA * (1.0f - t) + radiusB * t;
-            glm::vec2 currPoint = P[1] + interpDir * interpRadius;
-            
-            SA.vah.push3(P[1], prevPoint, currPoint, C[1], C[1], C[1], 0, 0, 0);
-            prevPoint = currPoint;
+    for (int i = 0; i < 3; i++) {
+        if (weight[i] >= 0.0f && weight[i] < 1.0f) {
+            C[i].a *= weight[i];
         }
     }
     
-    (void)P1a_outer; (void)P1b_outer; (void)P2a_outer; (void)P2b_outer;
-    (void)fullWidth;
+    // Point 0 (start)
+    {
+        int i = 0;
+        glm::vec2 cap1, cap0;
+        float r = 0, t = 0, d = 0;
+        makeTrc(P[i], P[i+1], T2, R2, cap1, weight[i], opt, r, t, d);
+        if (varying_weight) {
+            makeTrc(P[i], P[i+1], T31, R31, cap0, weight[i+1], opt, d, d, d);
+        } else {
+            T31 = T2;
+            R31 = R2;
+        }
+        util::anchorOutward(R2, P[i+1], P[i+2]);
+        util::followSigns(T2, R2);
+        
+        SL[i].bR = cap1;
+        
+        if (capFirst) {
+            if (opt.cap == CapStyle::Square) {
+                P[0] -= cap1 * (t + r);
+            }
+            util::opposite(cap1);
+            if (opt.feather && !opt.noFeatherAtCap)
+                cap1 *= opt.feathering;
+            SA.capStart = cap1;
+        }
+        
+        SL[i].djoint = static_cast<char>(opt.cap);
+        SL[i].T = T2;
+        SL[i].R = R2;
+        SL[i].t = t;
+        SL[i].r = r;
+        SL[i].degenT = false;
+        SL[i].degenR = false;
+        
+        SL[i+1].T1 = T31;
+        SL[i+1].R1 = R31;
+    }
     
-    // Draw second segment (from P[1] to P[2])
-    StAnchor seg2;
-    seg2.P[0] = P[1];
-    seg2.P[1] = P[2];
-    seg2.C[0] = C[1];
-    seg2.C[1] = C[2];
-    seg2.W[0] = W[1];
-    seg2.W[1] = W[2];
-    segment(seg2, opt, false, capLast, true);
-    SA.vah.push(seg2.vah);
+    // Cap last point
+    if (capLast) {
+        int i = 2;
+        glm::vec2 cap2, dummyT, dummyR;
+        float t = 0, r = 0, d = 0;
+        makeTrc(P[i-1], P[i], dummyT, dummyR, cap2, weight[i], opt, r, t, d);
+        if (opt.cap == CapStyle::Square) {
+            P[2] += cap2 * (t + r);
+        }
+        SL[i].bR = cap2;
+        if (opt.feather && !opt.noFeatherAtCap)
+            cap2 *= opt.feathering;
+        SA.capEnd = cap2;
+    }
+    
+    // Point 1 (joint)
+    {
+        int i = 1;
+        float r = 0, t = 0;
+        glm::vec2 P_cur = P[i];
+        glm::vec2 P_nxt = P[i+1];
+        glm::vec2 P_las = P[i-1];
+        if (opt.cap == CapStyle::Butt || opt.cap == CapStyle::Square) {
+            P_nxt -= SA.capEnd;
+            P_las -= SA.capStart;
+        }
+        
+        {
+            glm::vec2 bR, cap0;
+            float length_cur = 0, length_nxt = 0, d = 0;
+            makeTrc(P_las, P_cur, T1, R1, cap0, weight[i-1], opt, d, d, length_cur);
+            if (varying_weight) {
+                makeTrc(P_las, P_cur, T21, R21, cap0, weight[i], opt, d, d, d);
+            } else {
+                T21 = T1;
+                R21 = R1;
+            }
+            
+            makeTrc(P_cur, P_nxt, T2, R2, bR, weight[i], opt, r, t, length_nxt);
+            if (varying_weight) {
+                makeTrc(P_cur, P_nxt, T31, R31, cap0, weight[i+1], opt, d, d, d);
+            } else {
+                T31 = T2;
+                R31 = R2;
+            }
+            
+            SL[i].T = T2;
+            SL[i].R = R2;
+            SL[i].bR = bR;
+            SL[i].t = t;
+            SL[i].r = r;
+            SL[i].degenT = false;
+            SL[i].degenR = false;
+            
+            SL[i+1].T1 = T31;
+            SL[i+1].R1 = R31;
+        }
+        
+        // Find angle between segments
+        glm::vec2 ln1 = P_cur - P_las;
+        glm::vec2 ln2 = P_nxt - P_cur;
+        util::normalize(ln1);
+        util::normalize(ln2);
+        glm::vec2 V;
+        util::dot(ln1, ln2, V);
+        float cos_tho = -V.x - V.y;
+        bool zero_degree = fabs(cos_tho - 1.0f) < 0.0000001f;
+        bool d180_degree = cos_tho < -1.0f + 0.0001f;
+        int result3 = 1;
+        
+        if ((cos_tho < 0 && opt.joint == JointStyle::Bevel) ||
+            (opt.joint != JointStyle::Bevel && opt.cap == CapStyle::Round) ||
+            (opt.joint == JointStyle::Round)) {
+            SL[i-1].bR *= 0.01f;
+            SL[i].bR *= 0.01f;
+            SL[i+1].bR *= 0.01f;
+        }
+        
+        // Orient vectors outward
+        util::anchorOutward(T1, P_cur, P_nxt);
+        util::followSigns(R1, T1);
+        util::anchorOutward(T21, P_cur, P_nxt);
+        util::followSigns(R21, T21);
+        util::followSigns(SL[i].T1, T21);
+        util::followSigns(SL[i].R1, T21);
+        util::anchorOutward(T2, P_cur, P_las);
+        util::followSigns(R2, T2);
+        util::followSigns(SL[i].T, T2);
+        util::followSigns(SL[i].R, T2);
+        util::anchorOutward(T31, P_cur, P_las);
+        util::followSigns(R31, T31);
+        
+        // Find intersection (miter point)
+        {
+            glm::vec2 interP, vP;
+            result3 = util::intersect(P_las + T1, P_cur + T21,
+                                      P_nxt + T31, P_cur + T2,
+                                      interP);
+            if (result3 != 0) {
+                vP = interP - P_cur;
+                SL[i].vP = vP;
+                SL[i].vR = vP * (r / std::max(t, 0.001f));
+            } else {
+                SL[i].vP = SL[i].T;
+                SL[i].vR = SL[i].R;
+            }
+        }
+        
+        // Invert vectors for inner edge tests
+        glm::vec2 T1i = -T1, R1i = -R1;
+        glm::vec2 T21i = -T21, R21i = -R21;
+        glm::vec2 T2i = -T2, R2i = -R2;
+        glm::vec2 T31i = -T31, R31i = -R31;
+        
+        // Fade degeneration
+        glm::vec2 PR1, PR2, PT1, PT2;
+        float pt1 = 0, pt2 = 0;
+        int result1r = util::intersect(P_nxt - T31 - R31, P_nxt + T31 + R31,
+                                       P_las + T1i + R1i, P_cur + T21i + R21i, PR1);
+        int result2r = util::intersect(P_las - T1 - R1, P_las + T1 + R1,
+                                       P_nxt + T31i + R31i, P_cur + T2i + R2i, PR2);
+        bool is_result1r = result1r == 1;
+        bool is_result2r = result2r == 1;
+        bool inner_sec = util::intersecting(P_las + T1i + R1i, P_cur + T21i + R21i,
+                                            P_nxt + T31i + R31i, P_cur + T2i + R2i);
+        
+        {
+            float pts[2] = {0};
+            int result1t = util::intersect(P_nxt - T31, P_nxt + T31,
+                                           P_las + T1i, P_cur + T21i, PT1, pts);
+            pt1 = pts[1];
+            int result2t = util::intersect(P_las - T1, P_las + T1,
+                                           P_nxt + T31i, P_cur + T2i, PT2, pts);
+            pt2 = pts[1];
+            bool is_result1t = result1t == 1;
+            bool is_result2t = result2t == 1;
+            
+            if (zero_degree) {
+                segment(SA, opt, capFirst, capLast, true);
+                return;
+            }
+            
+            if ((is_result1r || is_result2r) && !inner_sec) {
+                SL[i].degenR = true;
+                SL[i].PT = is_result1r ? PT1 : PT2;
+                SL[i].PR = is_result1r ? PR1 : PR2;
+                SL[i].pt = is_result1r ? pt1 : pt2;
+                if (SL[i].pt < 0) SL[i].pt = 0.0001f;
+                SL[i].preFull = is_result1r;
+                SL[i].R_full_degen = false;
+                
+                glm::vec2 P_nxt2 = P[i+1];
+                glm::vec2 P_las2 = P[i-1];
+                if (opt.cap == CapStyle::Rect || opt.cap == CapStyle::Round) {
+                    P_nxt2 += SA.capEnd;
+                    P_las2 += SA.capStart;
+                }
+                glm::vec2 PR;
+                int result2;
+                if (is_result1r) {
+                    result2 = util::intersect(P_nxt2 - T31i - R31i, P_nxt2 + T31i,
+                                              P_las2 + T1i + R1i, P_cur + T21i + R21i, PR);
+                } else {
+                    result2 = util::intersect(P_las2 - T1i - R1i, P_las2 + T1i,
+                                              P_nxt2 + T31i + R31i, P_cur + T2i + R2i, PR);
+                }
+                if (result2 == 1) {
+                    SL[i].R_full_degen = true;
+                    SL[i].PR = PR;
+                }
+            }
+            
+            if (is_result1t || is_result2t) {
+                SL[i].degenT = true;
+                SL[i].preFull = is_result1t;
+                SL[i].PT = is_result1t ? PT1 : PT2;
+                SL[i].pt = is_result1t ? pt1 : pt2;
+            }
+        }
+        
+        SL[i].djoint = static_cast<char>(opt.joint);
+        if (opt.joint == JointStyle::Miter) {
+            if (cos_tho >= cos_cri_angle) {
+                SL[i].djoint = static_cast<char>(JointStyle::Bevel);
+            }
+        }
+        
+        if (d180_degree || result3 == 0) {
+            util::sameSideOfLine(SL[i].R, SL[i-1].R, P_cur, P_las);
+            util::followSigns(SL[i].T, SL[i].R);
+            SL[i].vP = SL[i].T;
+            util::followSigns(SL[i].T1, SL[i].T);
+            util::followSigns(SL[i].R1, SL[i].T);
+            SL[i].vR = SL[i].R;
+            SL[i].djoint = static_cast<char>(JointStyle::Miter);
+        }
+    }
+    
+    // Point 2 (end)
+    {
+        int i = 2;
+        glm::vec2 cap0;
+        float r = 0, t = 0, d = 0;
+        makeTrc(P[i-1], P[i], T2, R2, cap0, weight[i], opt, r, t, d);
+        util::sameSideOfLine(R2, SL[i-1].R, P[i-1], P[i]);
+        util::followSigns(T2, R2);
+        
+        SL[i].djoint = static_cast<char>(opt.cap);
+        SL[i].T = T2;
+        SL[i].R = R2;
+        SL[i].t = t;
+        SL[i].r = r;
+        SL[i].degenT = false;
+        SL[i].degenR = false;
+    }
+    
+    if (capFirst || capLast) {
+        anchorCap(opt, SA.P, SA.C, SA.SL, SA.vah, SA.capStart, SA.capEnd);
+    }
+    anchorLate(opt, P, C, SL, SA.vah, SA.capStart, SA.capEnd);
 }
+
+void Polyline::anchorCap(const Options& opt,
+                         glm::vec2* P, ofFloatColor* C, StPolyline* SL,
+                         VertexArrayHolder& tris,
+                         const glm::vec2& cap1, const glm::vec2& cap2) {
+    for (int i = 0, k = 0; k <= 1; i = 2, k++) {
+        glm::vec2 cur_cap = (i == 0) ? cap1 : cap2;
+        if (glm::length(cur_cap) < 0.001f) continue;
+        
+        VertexArrayHolder cap;
+        cap.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLES);
+        
+        if (SL[i].djoint == static_cast<char>(CapStyle::Round)) {
+            VertexArrayHolder strip;
+            strip.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+            
+            ofFloatColor C2 = C[i]; C2.a = 0.0f;
+            glm::vec2 O = P[i];
+            glm::vec2 app_P = O + SL[i].T;
+            glm::vec2 bRcap = SL[i].bR;
+            util::followSigns(bRcap, cur_cap);
+            float dangle = getPljRoundDangle(SL[i].t, SL[i].r, opt.worldToScreenRatio);
+            
+            // Core arc
+            vectorsToArc(strip, O, C[i], C[i],
+                         SL[i].T + bRcap, -SL[i].T + bRcap,
+                         dangle, SL[i].t, 0.0f, false, app_P,
+                         glm::vec2(0), 0, false);
+            strip.push(O - SL[i].T, C[i]);
+            strip.push(app_P, C[i]);
+            
+            strip.jump();
+            
+            // Fade arc
+            glm::vec2 a1 = O + SL[i].T;
+            glm::vec2 a2 = O + SL[i].T * (1.0f / SL[i].t) * (SL[i].t + SL[i].r);
+            glm::vec2 b1 = O - SL[i].T;
+            glm::vec2 b2 = O - SL[i].T * (1.0f / SL[i].t) * (SL[i].t + SL[i].r);
+            
+            strip.push(a1, C[i]);
+            strip.push(a2, C2);
+            vectorsToArc(strip, O, C[i], C2,
+                         SL[i].T + bRcap, -SL[i].T + bRcap,
+                         dangle, SL[i].t, SL[i].t + SL[i].r, false, O,
+                         glm::vec2(0), 0, false);
+            strip.push(b1, C[i]);
+            strip.push(b2, C2);
+            
+            cap.push(strip);
+        } else {
+            glm::vec2 P_cur = P[i];
+            glm::vec2 P0 = P_cur + SL[i].T + SL[i].R;
+            glm::vec2 P1l = P0 + cur_cap;
+            glm::vec2 P2l = P_cur + SL[i].T;
+            glm::vec2 P4l = P_cur - SL[i].T;
+            glm::vec2 P3l = P4l - SL[i].R + cur_cap;
+            glm::vec2 P5l = P4l - SL[i].R;
+            
+            cap.pushF(P0, C[i]);
+            cap.pushF(P1l, C[i]);
+            cap.push(P2l, C[i]);
+            
+            cap.pushF(P1l, C[i]);
+            cap.push(P2l, C[i]);
+            cap.pushF(P3l, C[i]);
+            
+            cap.push(P2l, C[i]);
+            cap.pushF(P3l, C[i]);
+            cap.push(P4l, C[i]);
+            
+            cap.pushF(P3l, C[i]);
+            cap.push(P4l, C[i]);
+            cap.pushF(P5l, C[i]);
+        }
+        tris.push(cap);
+    }
+}
+
+void Polyline::anchorLate(const Options& opt,
+                          glm::vec2* P, ofFloatColor* C, StPolyline* SL,
+                          VertexArrayHolder& tris,
+                          const glm::vec2& cap1, const glm::vec2& cap2) {
+    glm::vec2 P_0 = P[0], P_1 = P[1], P_2 = P[2];
+    if (SL[0].djoint == static_cast<char>(CapStyle::Butt) ||
+        SL[0].djoint == static_cast<char>(CapStyle::Square))
+        P_0 -= cap1;
+    if (SL[2].djoint == static_cast<char>(CapStyle::Butt) ||
+        SL[2].djoint == static_cast<char>(CapStyle::Square))
+        P_2 -= cap2;
+    
+    // Core points (at T distance)
+    glm::vec2 P0 = P_1 + SL[1].vP;
+    glm::vec2 P1 = P_1 - SL[1].vP;
+    glm::vec2 P2 = P_1 + SL[1].T1;
+    glm::vec2 P3 = P_0 + SL[0].T;
+    glm::vec2 P4 = P_0 - SL[0].T;
+    glm::vec2 P5 = P_1 + SL[1].T;
+    glm::vec2 P6 = P_2 + SL[2].T;
+    glm::vec2 P7 = P_2 - SL[2].T;
+    
+    // Fade points (at T+R distance)
+    glm::vec2 P0r = P0 + SL[1].vR;
+    glm::vec2 P1r = P1 - SL[1].vR;
+    glm::vec2 P2r = P2 + SL[1].R1 + SL[0].bR;
+    glm::vec2 P3r = P3 + SL[0].R;
+    glm::vec2 P4r = P4 - SL[0].R;
+    glm::vec2 P5r = P5 + SL[1].R - SL[1].bR;
+    glm::vec2 P6r = P6 + SL[2].R;
+    glm::vec2 P7r = P7 - SL[2].R;
+    
+    // Compute Cpt for degeneration cases
+    ofFloatColor Cpt = C[1];
+    if (SL[1].degenT || SL[1].degenR) {
+        float pt = sqrtf(std::max(SL[1].pt, 0.0f));
+        if (SL[1].preFull)
+            Cpt = util::colorBetween(C[0], C[1], pt);
+        else
+            Cpt = util::colorBetween(C[1], C[2], 1.0f - pt);
+    }
+    
+    // Core body
+    if (SL[1].degenT) {
+        P1 = SL[1].PT;
+        if (SL[1].degenR)
+            P1r = SL[1].PR;
+        
+        tris.push3(P3, P2, P1, C[0], C[1], C[1]);
+        tris.push3(P1, P5, P6, C[1], C[1], C[2]);
+        if (SL[1].preFull) {
+            tris.push3(P1, P3, P4, C[1], C[0], C[0]);
+        } else {
+            tris.push3(P1, P6, P7, C[1], C[2], C[2]);
+        }
+    } else if (SL[1].degenR && SL[1].pt > 0.0001f) {
+        glm::vec2 P9 = SL[1].PT;
+        if (SL[1].preFull) {
+            tris.push3(P1, P5, P6, C[1], C[1], C[2]);
+            tris.push3(P1, P6, P7, C[1], C[2], C[2]);
+            tris.push3(P3, P2, P1, C[0], C[1], C[1]);
+            tris.push3(P3, P9, P1, C[0], Cpt, C[1]);
+            tris.push3(P3, P9, P4, C[0], Cpt, C[0]);
+        } else {
+            tris.push3(P3, P2, P1, C[0], C[1], C[1]);
+            tris.push3(P1, P3, P4, C[1], C[0], C[0]);
+            tris.push3(P5, P1, P6, C[1], C[1], C[2]);
+            tris.push3(P1, P6, P9, C[1], C[2], Cpt);
+            tris.push3(P7, P9, P6, C[2], Cpt, C[2]);
+        }
+    } else {
+        tris.push3(P3, P2, P1, C[0], C[1], C[1]);
+        tris.push3(P1, P3, P4, C[1], C[0], C[0]);
+        tris.push3(P1, P5, P6, C[1], C[1], C[2]);
+        tris.push3(P1, P6, P7, C[1], C[2], C[2]);
+    }
+    
+    // Joint fill (core)
+    switch (SL[1].djoint) {
+        case static_cast<char>(JointStyle::Miter):
+            tris.push3(P2, P5, P0, C[1], C[1], C[1]);
+            // fall through to bevel
+        case static_cast<char>(JointStyle::Bevel):
+            tris.push3(P2, P5, P1, C[1], C[1], C[1]);
+            break;
+        case static_cast<char>(JointStyle::Round): {
+            VertexArrayHolder strip;
+            strip.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+            vectorsToArc(strip, P_1, C[1], C[1],
+                         SL[1].T1, SL[1].T,
+                         getPljRoundDangle(SL[1].t, SL[1].r, opt.worldToScreenRatio),
+                         SL[1].t, 0.0f, false, P1,
+                         glm::vec2(0), 0, true);
+            tris.push(strip);
+        } break;
+    }
+    
+    // Inner fade
+    if (SL[1].degenR) {
+        glm::vec2 P9 = SL[1].PT;
+        glm::vec2 P9r = SL[1].PR;
+        ofFloatColor ccpt = SL[1].degenT ? C[1] : Cpt;
+        
+        if (SL[1].preFull) {
+            // Quad: P9, P4, P9r, P4r (triangle strip order)
+            tris.push(P9, ccpt);
+            tris.push(P4, C[0]);
+            tris.pushF(P9r, C[1]);
+            tris.push(P4, C[0]);
+            tris.pushF(P9r, C[1]);
+            tris.pushF(P4r, C[0]);
+            
+            if (!SL[1].degenT) {
+                glm::vec2 mid = (P9 + P7) * 0.5f;
+                tris.push(P1, C[1]);
+                tris.push(P9, Cpt);
+                tris.pushF(mid, C[1]);
+                tris.push(P1, C[1]);
+                tris.push(P7, C[2]);
+                tris.pushF(mid, C[1]);
+            }
+        } else {
+            // Quad: P9, P7, P9r, P7r (triangle strip order)
+            tris.push(P9, ccpt);
+            tris.push(P7, C[2]);
+            tris.pushF(P9r, C[1]);
+            tris.push(P7, C[2]);
+            tris.pushF(P9r, C[1]);
+            tris.pushF(P7r, C[2]);
+            
+            if (!SL[1].degenT) {
+                glm::vec2 mid = (P9 + P4) * 0.5f;
+                tris.push(P1, C[1]);
+                tris.push(P9, Cpt);
+                tris.pushF(mid, C[1]);
+                tris.push(P1, C[1]);
+                tris.push(P4, C[0]);
+                tris.pushF(mid, C[1]);
+            }
+        }
+    } else {
+        // Normal inner fade (both sides)
+        tris.push(P1, C[1]);
+        tris.push(P4, C[0]);
+        tris.pushF(P1r, C[1]);
+        tris.push(P4, C[0]);
+        tris.pushF(P1r, C[1]);
+        tris.pushF(P4r, C[0]);
+        tris.push(P1, C[1]);
+        tris.push(P7, C[2]);
+        tris.pushF(P1r, C[1]);
+        tris.push(P7, C[2]);
+        tris.pushF(P1r, C[1]);
+        tris.pushF(P7r, C[2]);
+    }
+    
+    { // Outer fade (always drawn)
+        tris.push(P2, C[1]);
+        tris.push(P3, C[0]);
+        tris.pushF(P2r, C[1]);
+        tris.push(P3, C[0]);
+        tris.pushF(P2r, C[1]);
+        tris.pushF(P3r, C[0]);
+        tris.push(P5, C[1]);
+        tris.push(P6, C[2]);
+        tris.pushF(P5r, C[1]);
+        tris.push(P6, C[2]);
+        tris.pushF(P5r, C[1]);
+        tris.pushF(P6r, C[2]);
+        
+        // Joint fade
+        switch (SL[1].djoint) {
+            case static_cast<char>(JointStyle::Miter):
+                tris.push(P0, C[1]);
+                tris.push(P5, C[1]);
+                tris.pushF(P0r, C[1]);
+                tris.push(P5, C[1]);
+                tris.pushF(P0r, C[1]);
+                tris.pushF(P5r, C[1]);
+                tris.push(P0, C[1]);
+                tris.push(P2, C[1]);
+                tris.pushF(P0r, C[1]);
+                tris.push(P2, C[1]);
+                tris.pushF(P0r, C[1]);
+                tris.pushF(P2r, C[1]);
+                break;
+            case static_cast<char>(JointStyle::Bevel):
+                tris.push(P2, C[1]);
+                tris.push(P5, C[1]);
+                tris.pushF(P2r, C[1]);
+                tris.push(P5, C[1]);
+                tris.pushF(P2r, C[1]);
+                tris.pushF(P5r, C[1]);
+                break;
+            case static_cast<char>(JointStyle::Round): {
+                VertexArrayHolder strip;
+                strip.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLE_STRIP);
+                ofFloatColor C2 = C[1]; C2.a = 0.0f;
+                vectorsToArc(strip, P_1, C[1], C2,
+                             SL[1].T1, SL[1].T,
+                             getPljRoundDangle(SL[1].t, SL[1].r, opt.worldToScreenRatio),
+                             SL[1].t, SL[1].t + SL[1].r, false, P_1,
+                             glm::vec2(0), 0, false);
+                tris.push(strip);
+            } break;
+        }
+    }
+}
+
+// ============================================================================
+// VectorsToArc (ported from C# reference)
+// ============================================================================
 
 void Polyline::vectorsToArc(VertexArrayHolder& hold,
                             const glm::vec2& P, const ofFloatColor& C, const ofFloatColor& C2,
                             const glm::vec2& PA, const glm::vec2& PB,
                             float dangle, float r, float r2,
                             bool ignorEnds, const glm::vec2& apparentP,
-                            const glm::vec2& hint, float rr, bool innerFade) {
+                            const glm::vec2& hint, float /*rr*/, bool /*innerFade*/) {
+    // Generates a triangle strip arc from PA to PB around center P.
+    // C = color for arc edge points, C2 = color for inner/center point.
+    // For anti-aliased edges: pass C with alpha=0 (transparent outer edge)
+    //   and C2 with full alpha (opaque center). The strip interpolates between them.
+    // For opaque fills: pass both C and C2 with full alpha.
+    
     const float m_pi = glm::pi<float>();
+    if (r < 0.0001f) return;
+    
     glm::vec2 A = PA * (1.0f / r);
     glm::vec2 B = PB * (1.0f / r);
     
-    // For vertex alpha approach: outer edge fades, inner stays solid
-    ofFloatColor C_outer = C;
-    ofFloatColor C_inner = C2;
-    if (!innerFade) {
-        C_outer.a = 0;  // Outer edge fades to transparent
-    }
+    A.x = glm::clamp(A.x, -0.999999f, 0.999999f);
+    B.x = glm::clamp(B.x, -0.999999f, 0.999999f);
     
-    float angle1 = acos(glm::clamp(A.x, -1.0f, 1.0f));
-    float angle2 = acos(glm::clamp(B.x, -1.0f, 1.0f));
+    float angle1 = acosf(A.x);
+    float angle2 = acosf(B.x);
     if (A.y > 0) angle1 = 2 * m_pi - angle1;
     if (B.y > 0) angle2 = 2 * m_pi - angle2;
     
+    if (glm::length(hint) > 0.001f) {
+        float nudge = 0.00001f;
+        if ((hint.x > 0) || (hint.x == 0 && hint.y > 0)) {
+            angle1 -= (angle1 < angle2 ? 1 : -1) * nudge;
+        } else {
+            angle1 += (angle1 < angle2 ? 1 : -1) * nudge;
+        }
+    }
+    
     if (angle2 > angle1) {
-        if (angle2 - angle1 > m_pi) {
-            angle2 = angle2 - 2 * m_pi;
-        }
+        if (angle2 - angle1 > m_pi) angle2 -= 2 * m_pi;
     } else {
-        if (angle1 - angle2 > m_pi) {
-            angle1 = angle1 - 2 * m_pi;
-        }
+        if (angle1 - angle2 > m_pi) angle1 -= 2 * m_pi;
     }
     
     bool incremental = angle1 <= angle2;
     
-    auto inner_arc_push = [&](float x, float y, bool reverse = false) {
-        glm::vec2 PP(P.x + x * r, P.y - y * r);
+    // For the second radius (r2): if > 0, inner points are on a smaller circle
+    // instead of at apparentP. This is used for fade strips between two arcs.
+    bool useInnerCircle = (r2 > 0.001f);
+    
+    auto pushArcPair = [&](float x, float y, bool reverse) {
+        glm::vec2 outerPt(P.x + x * r, P.y - y * r);
+        glm::vec2 innerPt = useInnerCircle
+            ? glm::vec2(P.x + x * r2, P.y - y * r2)
+            : apparentP;
         if (!reverse) {
-            hold.push(PP, C_outer, 0);
-            hold.push(apparentP, C_inner, 0);
+            hold.push(outerPt, C);
+            hold.push(innerPt, C2);
         } else {
-            hold.push(apparentP, C_inner, 0);
-            hold.push(PP, C_outer, 0);
+            hold.push(innerPt, C2);
+            hold.push(outerPt, C);
         }
     };
     
     if (incremental) {
         if (!ignorEnds) {
-            hold.push(P + PB, C_outer, 0);
-            hold.push(apparentP, C_inner, 0);
+            glm::vec2 startOuter(P.x + PB.x, P.y + PB.y);
+            glm::vec2 startInner = useInnerCircle
+                ? glm::vec2(P.x + B.x * r2, P.y + B.y * r2) : apparentP;
+            hold.push(startOuter, C);
+            hold.push(startInner, C2);
         }
-        for (float a = angle2 - dangle; a > angle1; a -= dangle) {
-            inner_arc_push(cos(a), sin(a));
+        int safety = 0;
+        for (float a = angle2 - dangle; a > angle1 && safety < 200; a -= dangle, safety++) {
+            pushArcPair(cosf(a), sinf(a), false);
         }
         if (!ignorEnds) {
-            hold.push(P + PA, C_outer, 0);
-            hold.push(apparentP, C_inner, 0);
+            glm::vec2 endOuter(P.x + PA.x, P.y + PA.y);
+            glm::vec2 endInner = useInnerCircle
+                ? glm::vec2(P.x + A.x * r2, P.y + A.y * r2) : apparentP;
+            hold.push(endOuter, C);
+            hold.push(endInner, C2);
         }
     } else {
         if (!ignorEnds) {
-            hold.push(apparentP, C_inner, 0);
-            hold.push(P + PB, C_outer, 0);
+            glm::vec2 startOuter(P.x + PB.x, P.y + PB.y);
+            glm::vec2 startInner = useInnerCircle
+                ? glm::vec2(P.x + B.x * r2, P.y + B.y * r2) : apparentP;
+            hold.push(startInner, C2);
+            hold.push(startOuter, C);
         }
-        for (float a = angle2 + dangle; a < angle1; a += dangle) {
-            inner_arc_push(cos(a), sin(a), true);
+        int safety = 0;
+        for (float a = angle2 + dangle; a < angle1 && safety < 200; a += dangle, safety++) {
+            pushArcPair(cosf(a), sinf(a), true);
         }
         if (!ignorEnds) {
-            hold.push(apparentP, C_inner, 0);
-            hold.push(P + PA, C_outer, 0);
+            glm::vec2 endOuter(P.x + PA.x, P.y + PA.y);
+            glm::vec2 endInner = useInnerCircle
+                ? glm::vec2(P.x + A.x * r2, P.y + A.y * r2) : apparentP;
+            hold.push(endInner, C2);
+            hold.push(endOuter, C);
         }
     }
 }
 
 // ============================================================================
-// Segment
+// Segment class
 // ============================================================================
 
 Segment::Segment(const glm::vec2& p1, const glm::vec2& p2,
@@ -956,7 +1673,7 @@ Segment::Segment(const glm::vec2& p1, const glm::vec2& p2,
 }
 
 // ============================================================================
-// Renderer
+// Renderer with shader support
 // ============================================================================
 
 Renderer::Renderer() {}
@@ -965,7 +1682,7 @@ Renderer::~Renderer() {}
 void Renderer::setup() {
     if (initialized) return;
     initialized = true;
-    ofLogNotice("ofxVase") << "Renderer initialized (using ofMesh)";
+    ofLogNotice("ofxVase") << "Renderer initialized (vertex-alpha anti-aliasing)";
 }
 
 void Renderer::begin() {
@@ -974,14 +1691,10 @@ void Renderer::begin() {
 }
 
 void Renderer::end() {
-    // Nothing to do - mesh draws immediately
 }
 
 void Renderer::draw(const VertexArrayHolder& holder) {
     if (holder.vertices.empty()) return;
-    
-    // Always use mesh path - it's reliable and handles vertex colors correctly
-    // OF's built-in rendering takes care of shaders automatically
     holder.toMesh().draw();
 }
 
@@ -998,7 +1711,6 @@ void Renderer::draw(const Segment& segment) {
 // ============================================================================
 
 namespace {
-    // Global state for simple API
     Options g_options;
     Renderer g_renderer;
     bool g_rendererInitialized = false;

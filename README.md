@@ -7,9 +7,9 @@ High-quality polyline rendering for openFrameworks with variable width, color, a
 ## Features
 
 - **Variable width** - Each vertex can have a different stroke width
-- **Variable color** - Per-vertex colors with smooth interpolation
-- **Smooth joints** - Round, Bevel, and Miter joint styles
-- **Round caps** - Semicircle end caps with smooth tessellation
+- **Variable color** - Per-vertex colors with smooth interpolation  
+- **Joint styles** - Round, Bevel, and Miter (with configurable limit)
+- **Cap styles** - Round, Square, and Butt
 - **Catmull-Rom smoothing** - Optional spline interpolation for silky curves
 - **Cross-platform** - Uses openFrameworks' native mesh rendering
 
@@ -113,11 +113,32 @@ opts.smoothing = 4;  // 4 subdivisions per segment = silky smooth curves
 - `3-5` = smooth curves
 - `6+` = very smooth (but more vertices)
 
+## Joint & Cap Styles
+
+### Joint Styles ✓
+All three joint styles are fully implemented:
+- **Round** - Smooth circular arc at turns (default)
+- **Bevel** - Simple flat cut at turns
+- **Miter** - Sharp pointed corners with configurable limit (`opts.miterLimit`, defaults to 4.0)
+
+```cpp
+opts.joint = ofxVase::JointStyle::Round;  // or Bevel, or Miter
+opts.miterLimit = 4.0f;  // Only affects Miter joints
+```
+
+### Cap Styles ✓
+- **Round** - Semicircular end caps (default)
+- **Square** - Extended rectangular caps
+- **Butt** - Flat caps with no extension
+
+```cpp
+opts.cap = ofxVase::CapStyle::Round;  // or Square, or Butt
+```
+
 ## Wishlist / TODO
 
-- [ ] **Shader-based anti-aliasing** - The original VASE renderer uses fragment shaders for feathered edges. We have the shaders in `src/shaders/` but currently have only mesh rendering working. Future: implement VBO path with shader-based AA.
+- [ ] **Shader-based anti-aliasing** - The original VASE renderer uses fragment shaders for feathered edges. We have the shaders in `src/shaders/` but currently use mesh rendering for simplicity. Future: implement VBO path with shader-based AA.
 - [ ] **Feathering** - Soft anti-aliased edges without MSAA (requires shader implementation)
-- [ ] **Bevel and Miter joints** - Currently only Round joints are implemented (Butt caps work as default)
 - [ ] **Performance optimization** - Batch rendering, VBO caching for static polylines
 - [ ] **Dashed/dotted lines** - Pattern support
 - [ ] **Gradient strokes** - Texture coordinate generation for shader-based gradients
