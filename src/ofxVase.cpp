@@ -664,6 +664,7 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
     
     struct SegTan {
         glm::vec2 N_top, N_bot;
+        bool degenerate = false;
     };
     std::vector<SegTan> seg(n - 1);
     
@@ -674,9 +675,10 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
         float R1 = V[i].t + V[i].r;
         float R2 = V[i+1].t + V[i+1].r;
         
-        if (d < 0.001f) {
+        if (d < 0.001f || d < fabsf(R1 - R2)) {
             seg[i].N_top = glm::vec2(0, 1);
             seg[i].N_bot = glm::vec2(0, -1);
+            seg[i].degenerate = true;
             continue;
         }
         
@@ -709,6 +711,8 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
     std::vector<MiterInfo> M(n);
 
     for (int i = 1; i < n - 1; i++) {
+        if (seg[i-1].degenerate || seg[i].degenerate) continue;
+
         auto& ps = seg[i-1];
         auto& ns = seg[i];
 
@@ -785,6 +789,7 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
     };
 
     auto drawSegBody = [&](int i) {
+        if (seg[i].degenerate) return;
         auto& v1 = V[i];
         auto& v2 = V[i+1];
         auto& st = seg[i];
@@ -850,7 +855,7 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
             drawSegBody(i - 1);
         }
 
-        if (i > 0 && i < n - 1) {
+        if (i > 0 && i < n - 1 && !seg[i-1].degenerate && !seg[i].degenerate) {
             drawJointFill(i);
         }
     }
