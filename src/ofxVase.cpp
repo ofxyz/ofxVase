@@ -690,27 +690,89 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
         seg[i].N_bot = sinA * u - cosA * nn;
     }
     
+    auto lineIsect = [](glm::vec2 p1, glm::vec2 d1,
+                        glm::vec2 p2, glm::vec2 d2,
+                        glm::vec2& out) -> bool {
+        float det = d1.x * d2.y - d1.y * d2.x;
+        if (fabsf(det) < 1e-8f) return false;
+        glm::vec2 dp = p2 - p1;
+        float t = (dp.x * d2.y - dp.y * d2.x) / det;
+        out = p1 + t * d1;
+        return true;
+    };
+
+    struct MiterInfo {
+        glm::vec2 core_inner, fade_inner;
+        bool valid = false;
+        bool top_is_inner = false;
+    };
+    std::vector<MiterInfo> M(n);
+
+    for (int i = 1; i < n - 1; i++) {
+        auto& ps = seg[i-1];
+        auto& ns = seg[i];
+
+        glm::vec2 d_prev = V[i].pos - V[i-1].pos;
+        glm::vec2 d_next = V[i+1].pos - V[i].pos;
+        float cross = d_prev.x * d_next.y - d_prev.y * d_next.x;
+        M[i].top_is_inner = (cross > 0);
+
+        glm::vec2 N_inner_prev = M[i].top_is_inner ? ps.N_top : ps.N_bot;
+        glm::vec2 N_inner_next = M[i].top_is_inner ? ns.N_top : ns.N_bot;
+
+        auto edgeDir = [&](int si, glm::vec2 N) -> glm::vec2 {
+            return (V[si+1].pos + V[si+1].t * N) - (V[si].pos + V[si].t * N);
+        };
+        auto edgeDirR = [&](int si, glm::vec2 N) -> glm::vec2 {
+            float R0 = V[si].t + V[si].r;
+            float R1 = V[si+1].t + V[si+1].r;
+            return (V[si+1].pos + R1 * N) - (V[si].pos + R0 * N);
+        };
+
+        float maxLen = 3.0f * (V[i].t + V[i].r);
+
+        glm::vec2 pA = V[i].pos + V[i].t * N_inner_prev;
+        glm::vec2 dA = edgeDir(i-1, N_inner_prev);
+        glm::vec2 pB = V[i].pos + V[i].t * N_inner_next;
+        glm::vec2 dB = edgeDir(i, N_inner_next);
+        glm::vec2 isect;
+        if (lineIsect(pA, dA, pB, dB, isect)) {
+            float dist = glm::length(isect - V[i].pos);
+            glm::vec2 avgInner = N_inner_prev + N_inner_next;
+            float side = glm::dot(isect - V[i].pos, avgInner);
+            if (side > 0 && dist < maxLen) {
+                M[i].core_inner = isect;
+                M[i].valid = true;
+
+                float R = V[i].t + V[i].r;
+                glm::vec2 fpA = V[i].pos + R * N_inner_prev;
+                glm::vec2 fdA = edgeDirR(i-1, N_inner_prev);
+                glm::vec2 fpB = V[i].pos + R * N_inner_next;
+                glm::vec2 fdB = edgeDirR(i, N_inner_next);
+                if (!lineIsect(fpA, fdA, fpB, fdB, M[i].fade_inner)) {
+                    glm::vec2 dir = glm::normalize(isect - V[i].pos);
+                    M[i].fade_inner = V[i].pos + R * dir;
+                }
+            }
+        }
+    }
+
     VertexArrayHolder tris;
     tris.setGlDrawMode(VertexArrayHolder::DRAW_TRIANGLES);
-    
-    // Full brush disc at each vertex
-    for (int i = 0; i < n; i++) {
-        auto& v = V[i];
+
+    auto drawDisc = [&](const VtxInfo& v) {
         const float pi2 = glm::pi<float>() * 2.0f;
         float dangle = getPljRoundDangle(v.t, v.r, opt.worldToScreenRatio);
         int steps = std::max(8, static_cast<int>(pi2 / dangle));
         float R = v.t + v.r;
-        
         for (int j = 0; j < steps; j++) {
             float a1 = pi2 * j / steps;
             float a2 = pi2 * (j + 1) / steps;
             glm::vec2 d1(cosf(a1), sinf(a1));
             glm::vec2 d2(cosf(a2), sinf(a2));
-            
             glm::vec2 p1 = v.pos + v.t * d1;
             glm::vec2 p2 = v.pos + v.t * d2;
             tris.push3(v.pos, p1, p2, v.col, v.col, v.col);
-            
             glm::vec2 f1 = v.pos + R * d1;
             glm::vec2 f2 = v.pos + R * d2;
             tris.push(p1, v.col);
@@ -720,46 +782,79 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
             tris.pushF(f1, v.col);
             tris.pushF(f2, v.col);
         }
-    }
-    
-    // Segment bodies
-    for (int i = 0; i < n - 1; i++) {
+    };
+
+    auto drawSegBody = [&](int i) {
         auto& v1 = V[i];
         auto& v2 = V[i+1];
         auto& st = seg[i];
-        
+
         glm::vec2 T1t = v1.pos + v1.t * st.N_top;
         glm::vec2 T1b = v1.pos + v1.t * st.N_bot;
         glm::vec2 T2t = v2.pos + v2.t * st.N_top;
         glm::vec2 T2b = v2.pos + v2.t * st.N_bot;
-        
+
         float R1 = v1.t + v1.r;
         float R2 = v2.t + v2.r;
         glm::vec2 F1t = v1.pos + R1 * st.N_top;
         glm::vec2 F1b = v1.pos + R1 * st.N_bot;
         glm::vec2 F2t = v2.pos + R2 * st.N_top;
         glm::vec2 F2b = v2.pos + R2 * st.N_bot;
-        
+
+        if (i > 0 && M[i].valid) {
+            if (M[i].top_is_inner) { T1t = M[i].core_inner; F1t = M[i].fade_inner; }
+            else                   { T1b = M[i].core_inner; F1b = M[i].fade_inner; }
+        }
+        if (i < n-2 && M[i+1].valid) {
+            if (M[i+1].top_is_inner) { T2t = M[i+1].core_inner; F2t = M[i+1].fade_inner; }
+            else                     { T2b = M[i+1].core_inner; F2b = M[i+1].fade_inner; }
+        }
+
         tris.push3(T1t, T2t, T2b, v1.col, v2.col, v2.col);
         tris.push3(T1t, T2b, T1b, v1.col, v2.col, v1.col);
-        
-        tris.push(T1t, v1.col);
-        tris.push(T2t, v2.col);
-        tris.pushF(F1t, v1.col);
-        tris.push(T2t, v2.col);
-        tris.pushF(F1t, v1.col);
-        tris.pushF(F2t, v2.col);
-        
-        tris.push(T1b, v1.col);
-        tris.push(T2b, v2.col);
-        tris.pushF(F1b, v1.col);
-        tris.push(T2b, v2.col);
-        tris.pushF(F1b, v1.col);
-        tris.pushF(F2b, v2.col);
+
+        tris.push(T1t, v1.col);  tris.push(T2t, v2.col);  tris.pushF(F1t, v1.col);
+        tris.push(T2t, v2.col);  tris.pushF(F1t, v1.col); tris.pushF(F2t, v2.col);
+
+        tris.push(T1b, v1.col);  tris.push(T2b, v2.col);  tris.pushF(F1b, v1.col);
+        tris.push(T2b, v2.col);  tris.pushF(F1b, v1.col); tris.pushF(F2b, v2.col);
+    };
+
+    auto drawJointFill = [&](int i) {
+        auto& v = V[i];
+        auto& ps = seg[i-1];
+        auto& ns = seg[i];
+
+        // Fill both-side gaps (center to tangent points)
+        glm::vec2 pt1 = v.pos + v.t * ps.N_top;
+        glm::vec2 pt2 = v.pos + v.t * ns.N_top;
+        tris.push3(v.pos, pt1, pt2, v.col, v.col, v.col);
+
+        glm::vec2 pb1 = v.pos + v.t * ps.N_bot;
+        glm::vec2 pb2 = v.pos + v.t * ns.N_bot;
+        tris.push3(v.pos, pb1, pb2, v.col, v.col, v.col);
+
+        // Miter connecting triangle (tangent_prev → miter → tangent_next)
+        if (M[i].valid) {
+            glm::vec2 ip = M[i].top_is_inner ? (v.pos + v.t * ps.N_top) : (v.pos + v.t * ps.N_bot);
+            glm::vec2 in_ = M[i].top_is_inner ? (v.pos + v.t * ns.N_top) : (v.pos + v.t * ns.N_bot);
+            tris.push3(ip, M[i].core_inner, in_, v.col, v.col, v.col);
+        }
+    };
+
+    // Draw in stroke order: disc → segment → joint → disc → segment → ...
+    for (int i = 0; i < n; i++) {
+        drawDisc(V[i]);
+
+        if (i > 0) {
+            drawSegBody(i - 1);
+        }
+
+        if (i > 0 && i < n - 1) {
+            drawJointFill(i);
+        }
     }
-    
-    // Joint arcs and caps are handled by the full disc stamps above.
-    
+
     inopt.holder.push(tris);
 }
 
