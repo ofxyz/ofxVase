@@ -789,7 +789,10 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
     };
 
     auto drawSegBody = [&](int i) {
-        if (seg[i].degenerate) return;
+        if (seg[i].degenerate) {
+            drawDisc(V[i+1]);
+            return;
+        }
         auto& v1 = V[i];
         auto& v2 = V[i+1];
         auto& st = seg[i];
@@ -847,10 +850,8 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
         }
     };
 
-    // Draw in stroke order: disc → segment → joint → disc → segment → ...
+    // Draw in stroke order: segment → joint → disc (disc on top to cover gradient bleed)
     for (int i = 0; i < n; i++) {
-        drawDisc(V[i]);
-
         if (i > 0) {
             drawSegBody(i - 1);
         }
@@ -858,6 +859,8 @@ void Polyline::polylineExact(const std::vector<glm::vec2>& P,
         if (i > 0 && i < n - 1 && !seg[i-1].degenerate && !seg[i].degenerate) {
             drawJointFill(i);
         }
+
+        drawDisc(V[i]);
     }
 
     inopt.holder.push(tris);
